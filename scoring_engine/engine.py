@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .types import MatchConfig, MatchState, MatchStatus
+from .models import MatchConfig, MatchState, MatchStatus
 
 
 POINT_LABELS = ("0", "15", "30", "40")

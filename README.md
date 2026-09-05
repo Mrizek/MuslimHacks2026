@@ -30,7 +30,7 @@ python tests/test_scoring_engine.py
 To start a match and type your own scoring commands:
 
 ```bash
-python manual_match.py
+python tests/interactive_match.py
 ```
 
 Or run the interactive tester from the test file:

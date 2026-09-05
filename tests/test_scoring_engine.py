@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scoring_engine import MatchConfig, MatchStatus, MatchType, ScoringEngine, Team
-from scoring_engine.interactive import run_interactive_match
+from interactive_match import run_interactive_match
 
 
 class ScoringEngineTests(unittest.TestCase):

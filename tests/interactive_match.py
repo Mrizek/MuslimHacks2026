@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from . import MatchConfig, MatchType, ScoringEngine, Team
+from pathlib import Path
+import sys
+
+# Allow this file to be run directly with:
+#   python tests/interactive_match.py
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scoring_engine import MatchConfig, MatchType, ScoringEngine, Team
 
 
 HELP_TEXT = """
@@ -90,3 +99,7 @@ def run_interactive_match() -> None:
             continue
 
         print_score(engine)
+
+
+if __name__ == "__main__":
+    run_interactive_match()
