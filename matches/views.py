@@ -51,6 +51,17 @@ def courts(request: HttpRequest) -> JsonResponse:
 
 
 @csrf_exempt
+def court_detail(request: HttpRequest, court_id: str) -> HttpResponse:
+    if request.method != "DELETE":
+        return JsonResponse({"type": "error", "code": "method_not_allowed"}, status=405)
+    try:
+        get_match_service().delete_court(None, court_id)
+        return HttpResponse(status=204)
+    except BackendError as error:
+        return _error_response(error)
+
+
+@csrf_exempt
 def matches(request: HttpRequest) -> JsonResponse:
     try:
         service = get_match_service()
@@ -63,10 +74,14 @@ def matches(request: HttpRequest) -> JsonResponse:
         return _error_response(error)
 
 
-def match_detail(request: HttpRequest, match_id: str) -> JsonResponse:
-    if request.method != "GET":
-        return JsonResponse({"type": "error", "code": "method_not_allowed"}, status=405)
+@csrf_exempt
+def match_detail(request: HttpRequest, match_id: str) -> HttpResponse:
     try:
-        return JsonResponse(get_match_service().get_match(None, match_id))
+        if request.method == "GET":
+            return JsonResponse(get_match_service().get_match(None, match_id))
+        if request.method == "DELETE":
+            get_match_service().delete_match(None, match_id)
+            return HttpResponse(status=204)
+        return JsonResponse({"type": "error", "code": "method_not_allowed"}, status=405)
     except BackendError as error:
         return _error_response(error)

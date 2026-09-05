@@ -67,6 +67,23 @@ OPENAPI_SCHEMA = {
                 },
             },
         },
+        "/courts/{court_id}/": {
+            "delete": {
+                "summary": "Delete a court and its matches",
+                "parameters": [
+                    {
+                        "name": "court_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "204": {"description": "Court deleted"},
+                    "404": {"$ref": "#/components/responses/Error"},
+                },
+            }
+        },
         "/matches/": {
             "get": {
                 "summary": "List matches",
@@ -108,7 +125,6 @@ OPENAPI_SCHEMA = {
                                     "games_per_set": 6,
                                     "tiebreak_at": 6,
                                     "tiebreak_points": 7,
-                                    "deciding_tiebreak_points": None,
                                     "sets_to_win": 1,
                                     "starting_server_team": 0,
                                     "starting_server_player": 0,
@@ -155,7 +171,22 @@ OPENAPI_SCHEMA = {
                     },
                     "404": {"$ref": "#/components/responses/Error"},
                 },
-            }
+            },
+            "delete": {
+                "summary": "Delete a match",
+                "parameters": [
+                    {
+                        "name": "match_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "204": {"description": "Match deleted"},
+                    "404": {"$ref": "#/components/responses/Error"},
+                },
+            },
         },
     },
     "components": {
@@ -197,7 +228,6 @@ OPENAPI_SCHEMA = {
                     "games_per_set": {"type": "integer", "minimum": 1, "default": 6},
                     "tiebreak_at": {"type": "integer", "minimum": 1, "default": 6},
                     "tiebreak_points": {"type": "integer", "enum": [7, 10], "default": 7},
-                    "deciding_tiebreak_points": {"type": "integer", "enum": [7, 10], "nullable": True},
                     "sets_to_win": {"type": "integer", "minimum": 1, "default": 1},
                     "starting_server_team": {"type": "integer", "enum": [0, 1], "default": 0},
                     "starting_server_player": {"type": "integer", "minimum": 0, "default": 0},

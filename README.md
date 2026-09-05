@@ -76,7 +76,6 @@ Content-Type: application/json
     "games_per_set": 6,
     "tiebreak_at": 6,
     "tiebreak_points": 7,
-    "deciding_tiebreak_points": null,
     "sets_to_win": 1,
     "starting_server_team": 0,
     "starting_server_player": 0,
@@ -106,7 +105,6 @@ Content-Type: application/json
     "games_per_set": 6,
     "tiebreak_at": 6,
     "tiebreak_points": 7,
-    "deciding_tiebreak_points": 10,
     "sets_to_win": 2,
     "starting_server_team": 0,
     "starting_server_player": 1,
@@ -122,6 +120,18 @@ Copy the returned `match_id`. You can retrieve it with:
 GET http://127.0.0.1:8000/api/matches/PASTE_MATCH_ID_HERE/
 ```
 
+Delete one match:
+
+```http
+DELETE http://127.0.0.1:8000/api/matches/PASTE_MATCH_ID_HERE/
+```
+
+Delete a court and all matches on that court:
+
+```http
+DELETE http://127.0.0.1:8000/api/courts/PASTE_COURT_ID_HERE/
+```
+
 ## Match Config Options
 
 All config fields are optional inside the `config` object. If a field is
@@ -133,7 +143,6 @@ omitted, the backend uses the default shown here.
 | `games_per_set` | `6` | integer `>= 1` | Games needed to win a set, still requiring a two-game margin unless a tiebreak is reached. |
 | `tiebreak_at` | `6` | integer `>= games_per_set` | Starts a tiebreak when the set score reaches this value for both teams. |
 | `tiebreak_points` | `7` | `7` or `10` | Points needed to win a normal tiebreak, with a two-point margin. |
-| `deciding_tiebreak_points` | `null` | `7`, `10`, or `null` | Optional tiebreak length for the deciding set. |
 | `sets_to_win` | `1` | integer `>= 1` | Sets needed to win the match. |
 | `starting_server_team` | `0` | `0` or `1` | Team that serves first. |
 | `starting_server_player` | `0` | valid player slot | Player slot that serves first: singles uses `0`; doubles uses `0` or `1`. |

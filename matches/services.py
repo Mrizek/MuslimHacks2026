@@ -44,6 +44,11 @@ class MatchService:
             return courts
         return [court for court in courts if court["id"] in principal.court_ids]
 
+    def delete_court(self, principal: Principal | None, court_id: str) -> None:
+        if principal is not None:
+            require_organizer(principal)
+        self.repository.delete_court(court_id)
+
     def create_match(self, principal: Principal | None, payload: Any) -> dict[str, Any]:
         if principal is not None:
             require_organizer(principal)
@@ -72,6 +77,12 @@ class MatchService:
         if principal is not None:
             require_read(principal, document["court_id"])
         return self.snapshot(document)
+
+    def delete_match(self, principal: Principal | None, match_id: str) -> None:
+        document = self.repository.get_match(match_id)
+        if principal is not None:
+            require_organizer(principal)
+        self.repository.delete_match(document["id"])
 
     def list_matches(self, principal: Principal | None) -> list[dict[str, Any]]:
         documents = self.repository.list_matches()

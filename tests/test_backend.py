@@ -103,8 +103,10 @@ class RestApiTests(SimpleTestCase):
         schema = schema_response.json()
         self.assertIn("get", schema["paths"]["/courts/"])
         self.assertIn("post", schema["paths"]["/courts/"])
+        self.assertIn("delete", schema["paths"]["/courts/{court_id}/"])
         self.assertIn("get", schema["paths"]["/matches/"])
         self.assertIn("post", schema["paths"]["/matches/"])
+        self.assertIn("delete", schema["paths"]["/matches/{match_id}/"])
         create_match_example = schema["paths"]["/matches/"]["post"]["requestBody"]["content"][
             "application/json"
         ]["example"]
@@ -130,6 +132,41 @@ class RestApiTests(SimpleTestCase):
         get_response = self.client.get(f"/api/matches/{created['match_id']}/")
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(get_response.json(), created)
+
+    def test_match_delete_removes_match(self):
+        court_response = self.client.post(
+            "/api/courts/", {"name": "Court One"}, content_type="application/json"
+        )
+        court_id = court_response.json()["id"]
+        create_response = self.client.post(
+            "/api/matches/", singles_payload(court_id), content_type="application/json"
+        )
+        match_id = create_response.json()["match_id"]
+
+        delete_response = self.client.delete(f"/api/matches/{match_id}/")
+        missing_response = self.client.get(f"/api/matches/{match_id}/")
+
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertEqual(delete_response.content, b"")
+        self.assertEqual(missing_response.status_code, 404)
+
+    def test_court_delete_removes_court_and_matches(self):
+        court_response = self.client.post(
+            "/api/courts/", {"name": "Court One"}, content_type="application/json"
+        )
+        court_id = court_response.json()["id"]
+        create_response = self.client.post(
+            "/api/matches/", singles_payload(court_id), content_type="application/json"
+        )
+        match_id = create_response.json()["match_id"]
+
+        delete_response = self.client.delete(f"/api/courts/{court_id}/")
+        courts_response = self.client.get("/api/courts/")
+        missing_match_response = self.client.get(f"/api/matches/{match_id}/")
+
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertEqual(courts_response.json(), {"courts": []})
+        self.assertEqual(missing_match_response.status_code, 404)
 
 
 class ServiceSafetyTests(SimpleTestCase):

@@ -225,9 +225,6 @@ class ScoringEngine:
         return self.state.games == [self.config.tiebreak_at, self.config.tiebreak_at]
 
     def _current_tiebreak_target(self) -> int:
-        is_deciding = sum(self.state.sets) == (self.config.sets_to_win * 2 - 2)
-        if is_deciding and self.config.deciding_tiebreak_points is not None:
-            return self.config.deciding_tiebreak_points
         return self.config.tiebreak_points
 
     def _advance_regular_server(self) -> None:

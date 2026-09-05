@@ -64,8 +64,6 @@ class MatchConfig:
     # A normal set tiebreak is commonly first to 7, win by 2.
     # Some event formats use first to 10, win by 2.
     tiebreak_points: int = 7
-    # Optional special tiebreak length for the final/deciding set.
-    deciding_tiebreak_points: int | None = None
     sets_to_win: int = 1
     starting_server_team: int = 0
     starting_server_player: int = 0
@@ -100,15 +98,11 @@ class MatchConfig:
         for name in ("games_per_set", "tiebreak_at", "tiebreak_points", "sets_to_win"):
             if type(getattr(self, name)) is not int:
                 raise ValueError(f"{name} must be an integer.")
-        if self.deciding_tiebreak_points is not None and type(self.deciding_tiebreak_points) is not int:
-            raise ValueError("deciding_tiebreak_points must be an integer or null.")
         if type(self.starting_server_team) is not int or type(self.starting_server_player) is not int:
             raise ValueError("Starting server team and player must be integers.")
 
         if self.tiebreak_points not in (7, 10):
             raise ValueError("Tiebreaks must be configured as 7 or 10 points.")
-        if self.deciding_tiebreak_points is not None and self.deciding_tiebreak_points not in (7, 10):
-            raise ValueError("Deciding tiebreaks must be configured as 7 or 10 points.")
         if self.games_per_set < 1:
             raise ValueError("games_per_set must be at least 1.")
         if self.tiebreak_at < self.games_per_set:

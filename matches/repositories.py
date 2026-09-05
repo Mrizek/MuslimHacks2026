@@ -31,6 +31,15 @@ class InMemoryMatchRepository:
             self.courts[court_id] = deepcopy(document)
         return document
 
+    def delete_court(self, court_id: str) -> None:
+        with self._lock:
+            if court_id not in self.courts:
+                raise NotFoundError("Court not found.")
+            del self.courts[court_id]
+            for match_id, match in list(self.matches.items()):
+                if match["court_id"] == court_id:
+                    del self.matches[match_id]
+
     def court_exists(self, court_id: str) -> bool:
         with self._lock:
             return court_id in self.courts
@@ -45,6 +54,12 @@ class InMemoryMatchRepository:
         with self._lock:
             self.matches[match_id] = stored
         return deepcopy(stored)
+
+    def delete_match(self, match_id: str) -> None:
+        with self._lock:
+            if match_id not in self.matches:
+                raise NotFoundError("Match not found.")
+            del self.matches[match_id]
 
     def get_match(self, match_id: str) -> dict[str, Any]:
         with self._lock:
@@ -79,6 +94,16 @@ class FirestoreMatchRepository:
         reference.set({"name": name})
         return {"id": reference.id, "name": name}
 
+    def delete_court(self, court_id: str) -> None:
+        court_reference = self.client.collection("courts").document(court_id)
+        if not court_reference.get().exists:
+            raise NotFoundError("Court not found.")
+        batch = self.client.batch()
+        batch.delete(court_reference)
+        for match in self.client.collection("matches").where("court_id", "==", court_id).stream():
+            batch.delete(match.reference)
+        batch.commit()
+
     def court_exists(self, court_id: str) -> bool:
         return self.client.collection("courts").document(court_id).get().exists
 
@@ -89,6 +114,12 @@ class FirestoreMatchRepository:
         reference = self.client.collection("matches").document()
         reference.set(deepcopy(document))
         return {"id": reference.id, **deepcopy(document)}
+
+    def delete_match(self, match_id: str) -> None:
+        reference = self.client.collection("matches").document(match_id)
+        if not reference.get().exists:
+            raise NotFoundError("Match not found.")
+        reference.delete()
 
     def get_match(self, match_id: str) -> dict[str, Any]:
         snapshot = self.client.collection("matches").document(match_id).get()
