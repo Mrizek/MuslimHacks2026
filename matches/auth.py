@@ -69,7 +69,7 @@ def require_organizer(principal: Principal) -> None:
 
 
 def require_command(principal: Principal, court_id: str, command: str) -> None:
-    if command in {"override", "clear_umpire_request"}:
+    if command in {"override", "clear_umpire_request", "undo"}:
         require_organizer(principal)
     elif command in {"score_point", "request_umpire"}:
         if not principal.can_score(court_id):

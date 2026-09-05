@@ -271,6 +271,50 @@ class WebSocketTests(SimpleTestCase):
         self.assertEqual(state["action_id"], state_id)
         self.assertEqual(state["state"]["games"], [2, 1])
 
+    async def test_match_socket_accepts_interactive_text_commands(self):
+        communicator, _ = await self.connect_match()
+
+        await communicator.send_to(text_data="point 0")
+        point_ack = await communicator.receive_json_from()
+        point_update = await communicator.receive_json_from()
+
+        self.assertEqual(point_ack["type"], "action_ack")
+        self.assertEqual(point_update["state"]["points"], [1, 0])
+
+        await communicator.send_to(text_data="point 1")
+        self.assertEqual((await communicator.receive_json_from())["type"], "action_ack")
+        self.assertEqual((await communicator.receive_json_from())["state"]["points"], [1, 1])
+
+        await communicator.send_to(text_data="umpire")
+        self.assertEqual((await communicator.receive_json_from())["type"], "action_ack")
+        self.assertTrue((await communicator.receive_json_from())["state"]["umpire_requested"])
+
+        await communicator.send_to(text_data="clear-umpire")
+        self.assertEqual((await communicator.receive_json_from())["type"], "action_ack")
+        self.assertFalse((await communicator.receive_json_from())["state"]["umpire_requested"])
+
+        await communicator.send_to(text_data="override games 4 3")
+        self.assertEqual((await communicator.receive_json_from())["type"], "action_ack")
+        self.assertEqual((await communicator.receive_json_from())["state"]["games"], [4, 3])
+
+        await communicator.send_to(text_data="override points 3 3")
+        self.assertEqual((await communicator.receive_json_from())["type"], "action_ack")
+        points_update = await communicator.receive_json_from()
+        self.assertEqual(points_update["state"]["points"], [3, 3])
+        self.assertEqual(points_update["state"]["point_number"], 6)
+
+        await communicator.send_to(text_data="show")
+        shown = await communicator.receive_json_from()
+        self.assertEqual(shown["type"], "match_snapshot")
+        self.assertEqual(shown["state"]["points"], [3, 3])
+
+        await communicator.send_to(text_data="undo")
+        undo_ack = await communicator.receive_json_from()
+        undo_update = await communicator.receive_json_from()
+
+        self.assertEqual(undo_ack["type"], "action_ack")
+        self.assertEqual(undo_update["state"]["points"], [1, 1])
+
     async def test_dashboard_updates_and_match_groups_are_isolated(self):
         second_match = self.service.create_match(ORGANIZER, singles_payload(self.court["id"]))
         active, _ = await self.connect_match()

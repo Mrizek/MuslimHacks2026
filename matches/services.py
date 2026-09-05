@@ -19,6 +19,9 @@ from .serialization import (
 )
 
 
+MATCH_HISTORY_LIMIT = 100
+
+
 class MatchService:
     def __init__(self, repository) -> None:
         self.repository = repository
@@ -60,6 +63,7 @@ class MatchService:
             "match_type": config.match_type.value,
             "config": config_to_firestore(config),
             "state": state_to_firestore(engine.state),
+            "history": [],
         }
         return self.snapshot(self.repository.create_match(document))
 
@@ -91,12 +95,21 @@ class MatchService:
             config = config_from_firestore(document["teams"], document["match_type"], document["config"])
             state = state_from_firestore(document["state"], config)
             engine = ScoringEngine(config, state)
+            history = deepcopy(document.get("history", []))
+            if not isinstance(history, list):
+                raise ValidationError("match history must be an array.")
 
             try:
                 if command == "score_point":
                     if set(payload) != {"winner_team"}:
                         raise ValidationError("score_point payload requires only winner_team.")
                     engine.score_point(payload["winner_team"])
+                elif command == "undo":
+                    if payload:
+                        raise ValidationError("undo payload must be empty.")
+                    if not history:
+                        raise ValidationError("No scoring actions to undo.")
+                    engine.state = state_from_firestore(history.pop(), config)
                 elif command == "request_umpire":
                     if payload:
                         raise ValidationError("request_umpire payload must be empty.")
@@ -120,6 +133,9 @@ class MatchService:
                 "match_type": document["match_type"],
                 "config": deepcopy(document["config"]),
                 "state": state_to_firestore(engine.state),
+                "history": history
+                if command == "undo"
+                else [*history, deepcopy(document["state"])][-MATCH_HISTORY_LIMIT:],
             }
             return updated
 

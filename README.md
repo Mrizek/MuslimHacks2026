@@ -188,16 +188,27 @@ Clear the umpire request:
 }
 ```
 
+Undo the latest saved action:
+
+```json
+{
+  "type": "undo",
+  "action_id": "44444444-4444-4444-8444-444444444444",
+  "payload": {}
+}
+```
+
 Override match state:
 
 ```json
 {
   "type": "override",
-  "action_id": "44444444-4444-4444-8444-444444444444",
+  "action_id": "55555555-5555-4555-8555-555555555555",
   "payload": {
     "changes": {
       "games": [4, 3],
       "points": [3, 2],
+      "point_number": 5,
       "server_team": 1,
       "server_player": 0
     }
@@ -210,7 +221,7 @@ Read the latest match state:
 ```json
 {
   "type": "get_state",
-  "action_id": "55555555-5555-4555-8555-555555555555"
+  "action_id": "66666666-6666-4666-8666-666666666666"
 }
 ```
 
@@ -220,6 +231,25 @@ Override changes may include these state fields: `points`, `games`, `sets`,
 `tiebreak_initial_server_team`, `tiebreak_initial_server_player`,
 `umpire_requested`, `status`, and `winner_team`. The backend validates the full
 state after applying the override.
+
+## Interactive WebSocket Commands
+
+The match WebSocket also accepts these raw text commands in Postman. Paste one
+line into the WebSocket **Message** box and click **Send**:
+
+```text
+point 0              Give the next point to team 0
+point 1              Give the next point to team 1
+undo                 Undo the latest action
+umpire               Request an umpire
+clear-umpire         Clear the umpire request
+override games 4 3   Set current games to 4-3
+override points 3 3  Set raw points to 3-3, displayed as 40-40
+show                 Print the current scoreboard
+```
+
+For raw text commands, the backend generates the `action_id`. Mutating commands
+return `action_ack` and then `match_updated`; `show` returns a `match_snapshot`.
 
 ## Dashboard WebSocket
 
@@ -235,8 +265,17 @@ The dashboard socket immediately receives all match snapshots and receives
 ```json
 {
   "type": "get_state",
-  "action_id": "66666666-6666-4666-8666-666666666666"
+  "action_id": "77777777-7777-4777-8777-777777777777"
 }
+```
+
+## Interactive Match Script
+
+The same commands can be run without WebSockets in the local interactive
+scoring script:
+
+```powershell
+python -B tests/interactive_match.py
 ```
 
 ## Tests
