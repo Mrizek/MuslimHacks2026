@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from django.http import HttpRequest, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from .errors import BackendError, ValidationError
+from .openapi import OPENAPI_SCHEMA, SWAGGER_UI_HTML
 from .runtime import get_match_service
 
 
@@ -26,6 +27,14 @@ def health(request: HttpRequest) -> JsonResponse:
     if request.method != "GET":
         return JsonResponse({"type": "error", "code": "method_not_allowed"}, status=405)
     return JsonResponse({"status": "ok"})
+
+
+def api_schema(request: HttpRequest) -> JsonResponse:
+    return JsonResponse(OPENAPI_SCHEMA)
+
+
+def api_docs(request: HttpRequest) -> HttpResponse:
+    return HttpResponse(SWAGGER_UI_HTML)
 
 
 @csrf_exempt

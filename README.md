@@ -33,6 +33,12 @@ python -B -m daphne -b 127.0.0.1 -p 8000 courtside_backend.asgi:application
 
 Health check: `http://127.0.0.1:8000/api/health/`
 
+Interactive Swagger UI: `http://127.0.0.1:8000/api/docs/`
+
+Use **Try it out** in Swagger to run the court and match GET/POST requests. The
+OpenAPI JSON is available at `http://127.0.0.1:8000/api/schema/` and can be
+imported into SwaggerHub.
+
 ## Create a Match
 
 No Authorization header is needed for this local demo.
