@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 
 from deepgram import (
     DeepgramClient,
@@ -13,6 +14,37 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000
 CHUNK = 1024
+POINT_VALUES = {
+    "love": "0",
+    "zero": "0",
+    "fifteen": "15",
+    "thirty": "30",
+    "forty": "40",
+    "fourty": "40",
+    "advantage": "AD",
+    "ad": "AD",
+}
+
+
+def normalize_score_call(transcript):
+    """Convert common speech-to-text score variants to a hyphenated score."""
+    text = transcript.lower().replace("-", " ")
+    for word, value in POINT_VALUES.items():
+        text = re.sub(rf"\b{word}\b", f" {value} ", text)
+
+    values = re.findall(r"(?<!\d)(?:0|15|30|40|ad)(?!\d)", text)
+    if len(values) < 2:
+        for compact_number in re.findall(r"\d+", text):
+            if re.fullmatch(r"(?:40|30|15|0)+", compact_number):
+                values.extend(re.findall(r"40|30|15|0", compact_number))
+
+    if len(values) >= 2:
+        return f"{values[0].upper()}-{values[1].upper()}"
+    return transcript
+
+
+def print_call(transcript, source="VOICE"):
+    print(f"{source:<6} {normalize_score_call(transcript)}")
 
 
 async def main():
@@ -32,7 +64,7 @@ async def main():
                 return
 
             if result.is_final:
-                print(f"CALL  {transcript}")
+                print_call(transcript)
             else:
                 print(f"...    {transcript}", end="\r")
 
@@ -50,6 +82,15 @@ async def main():
             channels=CHANNELS,
             sample_rate=RATE,
             interim_results=True,
+            keyterm=[
+                "zero",
+                "fifteen",
+                "thirty",
+                "forty",
+                "fault",
+                "correction",
+                "advantage",
+            ],
         )
 
         print("Connecting to Deepgram...")
