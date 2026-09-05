@@ -93,6 +93,24 @@ class RestApiTests(SimpleTestCase):
     def tearDown(self):
         set_match_service(None)
 
+    def test_swagger_ui_and_openapi_schema(self):
+        docs_response = self.client.get("/api/docs/")
+        schema_response = self.client.get("/api/schema/")
+
+        self.assertEqual(docs_response.status_code, 200)
+        self.assertContains(docs_response, "SwaggerUIBundle")
+        self.assertEqual(schema_response.status_code, 200)
+        schema = schema_response.json()
+        self.assertIn("get", schema["paths"]["/courts/"])
+        self.assertIn("post", schema["paths"]["/courts/"])
+        self.assertIn("get", schema["paths"]["/matches/"])
+        self.assertIn("post", schema["paths"]["/matches/"])
+        create_match_example = schema["paths"]["/matches/"]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["example"]
+        self.assertIn("games_per_set", create_match_example["config"])
+        self.assertIn("serving_orders", create_match_example["config"])
+
     def test_match_creation_and_retrieval(self):
         court_response = self.client.post(
             "/api/courts/", {"name": "Court One"}, content_type="application/json"
