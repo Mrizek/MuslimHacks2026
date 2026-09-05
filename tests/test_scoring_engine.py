@@ -10,7 +10,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scoring_engine import MatchConfig, MatchStatus, MatchType, ScoringEngine, Team
-from interactive_match import run_interactive_match
+try:
+    from .interactive_match import run_interactive_match
+except ImportError:  # Direct execution: python tests/test_scoring_engine.py
+    from interactive_match import run_interactive_match
 
 
 class ScoringEngineTests(unittest.TestCase):
@@ -131,6 +134,21 @@ class ScoringEngineTests(unittest.TestCase):
         engine.score_point(0)
 
         self.assertEqual(engine.state.completed_sets, [(7, 6)])
+
+    def test_tiebreak_receiver_serves_first_game_of_next_set(self):
+        engine = self.singles_engine(sets_to_win=2)
+
+        for _ in range(6):
+            self.win_game(engine, 0)
+            self.win_game(engine, 1)
+        self.assertEqual(engine.state.server_team, 0)
+        for _ in range(7):
+            engine.score_point(0)
+
+        self.assertEqual(engine.state.completed_sets, [(7, 6)])
+        self.assertEqual(engine.state.status, MatchStatus.IN_PROGRESS)
+        self.assertEqual(engine.state.server_team, 1)
+        self.assertEqual(engine.display_score()["server"], "B1")
 
     def test_doubles_serving_order_rotates_by_team_and_player(self):
         engine = self.doubles_engine()

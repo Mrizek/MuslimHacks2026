@@ -29,8 +29,14 @@ class Team:
     players: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not all(isinstance(player, str) for player in self.players):
+            raise ValueError("Team and player names must be strings.")
         if len(self.players) not in (1, 2):
             raise ValueError("A team must have one player for singles or two players for doubles.")
+        if not self.name.strip():
+            raise ValueError("A team name cannot be empty.")
+        if any(not player.strip() for player in self.players):
+            raise ValueError("Player names cannot be empty.")
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,8 @@ class MatchConfig:
     def __post_init__(self) -> None:
         if len(self.teams) != 2:
             raise ValueError("Exactly two teams are required.")
+        if not isinstance(self.match_type, MatchType):
+            raise ValueError("match_type must be singles or doubles.")
         if self.match_type == MatchType.SINGLES:
             expected_slots = (0,)
         else:
@@ -87,10 +95,30 @@ class MatchConfig:
             if tuple(sorted(order)) != expected_slots:
                 raise ValueError("Serving and receiving orders must list each player slot once.")
 
+        if type(self.no_ad) is not bool:
+            raise ValueError("no_ad must be true or false.")
+        for name in ("games_per_set", "tiebreak_at", "tiebreak_points", "sets_to_win"):
+            if type(getattr(self, name)) is not int:
+                raise ValueError(f"{name} must be an integer.")
+        if self.deciding_tiebreak_points is not None and type(self.deciding_tiebreak_points) is not int:
+            raise ValueError("deciding_tiebreak_points must be an integer or null.")
+        if type(self.starting_server_team) is not int or type(self.starting_server_player) is not int:
+            raise ValueError("Starting server team and player must be integers.")
+
         if self.tiebreak_points not in (7, 10):
             raise ValueError("Tiebreaks must be configured as 7 or 10 points.")
         if self.deciding_tiebreak_points is not None and self.deciding_tiebreak_points not in (7, 10):
             raise ValueError("Deciding tiebreaks must be configured as 7 or 10 points.")
+        if self.games_per_set < 1:
+            raise ValueError("games_per_set must be at least 1.")
+        if self.tiebreak_at < self.games_per_set:
+            raise ValueError("tiebreak_at cannot be lower than games_per_set.")
+        if self.sets_to_win < 1:
+            raise ValueError("sets_to_win must be at least 1.")
+        if self.starting_server_team not in (0, 1):
+            raise ValueError("starting_server_team must be 0 or 1.")
+        if self.starting_server_player not in self.serving_orders[self.starting_server_team]:
+            raise ValueError("starting_server_player must belong to the starting server team.")
 
 
 @dataclass
@@ -132,6 +160,8 @@ class MatchState:
             "game_number": self.game_number,
             "point_number": self.point_number,
             "in_tiebreak": self.in_tiebreak,
+            "tiebreak_initial_server_team": self.tiebreak_initial_server_team,
+            "tiebreak_initial_server_player": self.tiebreak_initial_server_player,
             "umpire_requested": self.umpire_requested,
             "status": self.status.value,
             "winner_team": self.winner_team,

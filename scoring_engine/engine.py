@@ -79,11 +79,18 @@ class ScoringEngine:
         This is intentionally flexible because real tournaments need quick
         corrections when players report a mistake or voice recognition mishears.
         """
-        self._remember("override")
+        unknown_fields = [key for key in changes if not hasattr(self.state, key)]
+        if unknown_fields:
+            raise AttributeError(f"Unknown match state field: {unknown_fields[0]}")
+
+        # Build the complete replacement first. An invalid field must never
+        # leave half of an organizer correction applied.
+        candidate = deepcopy(self.state)
         for key, value in changes.items():
-            if not hasattr(self.state, key):
-                raise AttributeError(f"Unknown match state field: {key}")
-            setattr(self.state, key, deepcopy(value))
+            setattr(candidate, key, deepcopy(value))
+
+        self._remember("override")
+        self.state = candidate
         self._refresh_receiver()
         self.state.last_action = "organizer_override"
         return self.state
@@ -150,6 +157,8 @@ class ScoringEngine:
 
     def _win_game(self, winner_team: int) -> None:
         # Winning a game resets points to 0-0 and may also finish a set.
+        was_tiebreak = self.state.in_tiebreak
+        tiebreak_initial_server_team = self.state.tiebreak_initial_server_team
         self.state.games[winner_team] += 1
         self.state.points = [0, 0]
         self.state.point_number = 0
@@ -162,7 +171,13 @@ class ScoringEngine:
 
         if self.state.status == MatchStatus.IN_PROGRESS:
             self.state.game_number += 1
-            self._advance_regular_server()
+            if was_tiebreak and tiebreak_initial_server_team is not None:
+                # The team that received the first tiebreak point serves the
+                # first game of the next set, regardless of the final point's
+                # server. This matters when a tiebreak ends on an odd pattern.
+                self._set_server_team(1 - tiebreak_initial_server_team)
+            else:
+                self._advance_regular_server()
             if self._should_start_tiebreak():
                 # At 6-6, switch to tiebreak scoring. We remember who starts
                 # serving because tiebreak service rotation has special rules.
@@ -223,6 +238,12 @@ class ScoringEngine:
         next_order = self.config.serving_orders[next_team]
         self.state.server_team = next_team
         self.state.server_player = next_order[service_game_index % len(next_order)]
+
+    def _set_server_team(self, team: int) -> None:
+        service_game_index = self.state.game_number // 2
+        order = self.config.serving_orders[team]
+        self.state.server_team = team
+        self.state.server_player = order[service_game_index % len(order)]
 
     def _refresh_receiver(self) -> None:
         # The receiver is always on the opposite team from the server.
