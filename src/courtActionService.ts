@@ -1,11 +1,11 @@
 import { courtsideConfig } from './config'
 import { matchFromBackend } from './matchService'
-import type { BackendMatchSnapshot, Match } from './types'
+import type { BackendMatchSnapshot, BackendMatchState, Match } from './types'
 
 export type CourtAction = 'score_team_0' | 'score_team_1' | 'correction' | 'override' | 'changeover' | 'umpire' | 'clear_umpire'
 export type MatchTimerState = { phase: 'serve' | 'changeover'; endsAt: number | null; remainingSeconds: number }
 export type CourtSnapshot = { match: Match; revision: string; timer?: MatchTimerState; umpirePending: boolean; canUndo: boolean; connected: boolean; initialSnapshotReady: boolean; error?: string }
-export type OverrideProposal = Pick<Match, 'scores' | 'server'>
+export type OverrideProposal = Partial<Omit<BackendMatchState, 'last_action'>>
 type CommandContext = { courtId: string; matchId: string; expectedRevision: string; requestId: string }
 export type CourtCommand = CommandContext & (
   | { action: 'override'; proposed: OverrideProposal; reason: string }
@@ -46,8 +46,8 @@ function snapshotFromBackend(message: BackendMatchSnapshot, connected: boolean):
 }
 
 class BackendCourtActionService implements CourtActionService {
-  capabilities: Partial<Record<CourtAction, boolean>> = { score_team_0: true, score_team_1: true, correction: true, umpire: true, clear_umpire: true }
-  unavailableReasons: Partial<Record<CourtAction, string>> = { override: missingCourtHandlers.override, changeover: missingCourtHandlers.changeover }
+  capabilities: Partial<Record<CourtAction, boolean>> = { score_team_0: true, score_team_1: true, correction: true, override: true, umpire: true, clear_umpire: true }
+  unavailableReasons: Partial<Record<CourtAction, string>> = { changeover: missingCourtHandlers.changeover }
   private sockets = new Map<string, SocketEntry>()
 
   subscribe(_courtId: string, matchId: string, receive: Subscriber): () => void {
@@ -86,6 +86,7 @@ class BackendCourtActionService implements CourtActionService {
     if (command.action === 'score_team_0') return { type: 'score_point', payload: { winner_team: 0 } }
     if (command.action === 'score_team_1') return { type: 'score_point', payload: { winner_team: 1 } }
     if (command.action === 'correction') return { type: 'undo', payload: {} }
+    if (command.action === 'override') return { type: 'override', payload: { changes: command.proposed } }
     if (command.action === 'umpire') return { type: 'request_umpire', payload: {} }
     if (command.action === 'clear_umpire') return { type: 'clear_umpire_request', payload: {} }
     return null
@@ -151,3 +152,34 @@ class BackendCourtActionService implements CourtActionService {
 }
 
 export const courtActionService: CourtActionService = new BackendCourtActionService()
+
+export function sendMatchOverride(matchId: string, proposed: OverrideProposal): Promise<Match> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`${courtsideConfig.wsBaseUrl}/matches/${matchId}/`)
+    const actionId = crypto.randomUUID()
+    const timeout = window.setTimeout(() => {
+      socket.close()
+      reject(new Error('No acknowledgement from the backend. Check the WebSocket connection.'))
+    }, 8000)
+    socket.onopen = () => socket.send(JSON.stringify({ type: 'override', action_id: actionId, payload: { changes: proposed } }))
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data) as MatchSocketMessage
+      if ((message.type === 'match_snapshot' || message.type === 'action_ack') && 'action_id' in message && message.action_id !== actionId) return
+      if (message.type === 'match_updated') {
+        window.clearTimeout(timeout)
+        socket.close()
+        resolve(matchFromBackend(message))
+      }
+      if (message.type === 'error') {
+        window.clearTimeout(timeout)
+        socket.close()
+        reject(new Error(message.message || message.code || 'Backend rejected the command.'))
+      }
+    }
+    socket.onerror = () => {
+      window.clearTimeout(timeout)
+      socket.close()
+      reject(new Error('Match socket is not connected yet.'))
+    }
+  })
+}

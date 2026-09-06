@@ -1,5 +1,5 @@
 export type MatchFormat = 'Singles' | 'Doubles' | 'Mixed doubles'
-export type MatchSettings = { noAd: boolean; decidingTiebreak: boolean; expressMode: boolean; serveClockEnabled: boolean; serveClockSeconds: number; changeoverSeconds: number }
+export type MatchSettings = { noAd: boolean; tiebreakPoints: 7 | 10; gamesPerSet: number; tiebreakAt: number; setsToWin: number; expressMode: boolean; serveClockEnabled: boolean; serveClockSeconds: number; changeoverSeconds: number }
 export type MatchScore = { sets: string; games: string; points: string }
 export type BackendMatchStatus = 'in_progress' | 'complete'
 export type Match = { id: string; courtId: string; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings; status: 'Live' | 'Scheduled' | 'Complete'; scores: [MatchScore, MatchScore]; setHistory?: string[][]; umpireRequested?: boolean; backendState?: BackendMatchState }
