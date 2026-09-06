@@ -7,7 +7,7 @@ const managementActions: { action: CourtAction; label: string; icon: string }[] 
   { action: 'correction', label: 'Undo', icon: 'U' },
   { action: 'override', label: 'Override', icon: 'O' },
   { action: 'changeover', label: 'Changeover', icon: 'C' },
-  { action: 'umpire', label: 'Call umpire', icon: '!' },
+  { action: 'umpire', label: 'Call official', icon: '!' },
 ]
 
 export function CourtControls({ court, snapshot, service, onAccepted, onChangeover }: { court: Court; snapshot: CourtSnapshot; service: CourtActionService; onAccepted: (snapshot: CourtSnapshot) => void; onChangeover: () => void }) {
@@ -52,7 +52,7 @@ export function CourtControls({ court, snapshot, service, onAccepted, onChangeov
       }
       if (result.snapshot.match.id !== snapshot.match.id || result.snapshot.match.courtId !== court.id) throw new Error('Unexpected match response.')
       onAccepted(result.snapshot)
-      setNotice(action === 'umpire' ? umpireRequestStatus(result.snapshot) || 'Umpire requested' : result.description)
+      setNotice(action === 'umpire' ? umpireRequestStatus(result.snapshot) || 'Official requested' : result.description)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Request failed. Check connection and retry.')
     } finally {
@@ -111,7 +111,7 @@ export function CourtControls({ court, snapshot, service, onAccepted, onChangeov
     <div className="court-feedback" role="status">{busy ? 'Waiting for acceptance...' : snapshot.umpirePending ? umpireRequestStatus(snapshot) : snapshot.connected === false ? 'Socket disconnected' : notice}</div>
     {error && <p role="alert" className="court-error">{error}</p>}
     <div className="court-action-grid court-score-grid">{([0, 1] as const).map((team) => <button key={team} className={`court-action court-action--score-team-${team}`} disabled={busy || Boolean(scoringUnavailable)} onClick={() => void execute(team === 0 ? 'score_team_0' : 'score_team_1')}><span className="court-action-title"><span aria-hidden="true">+</span>Point Team {team + 1}</span>{scoringUnavailable && <small>{scoringUnavailable}</small>}</button>)}</div>
-    <div className="court-action-grid">{managementActions.map(({ action, label, icon }) => <button key={action} className={`court-action court-action--${action}`} disabled={busy || (action !== 'changeover' && Boolean(unavailable(action)))} onClick={() => void execute(action)}><span className="court-action-title"><span aria-hidden="true">{icon}</span>{label}</span>{action !== 'changeover' && unavailable(action) && <small>{unavailable(action)}</small>}</button>)}{snapshot.umpirePending && <button className="court-action court-action--clear_umpire" disabled={busy || Boolean(unavailable('clear_umpire'))} onClick={() => void execute('clear_umpire')}><span className="court-action-title"><span aria-hidden="true">X</span>Clear umpire</span></button>}</div>
+    <div className="court-action-grid">{managementActions.map(({ action, label, icon }) => <button key={action} className={`court-action court-action--${action}`} disabled={busy || (action !== 'changeover' && Boolean(unavailable(action)))} onClick={() => void execute(action)}><span className="court-action-title"><span aria-hidden="true">{icon}</span>{label}</span>{action !== 'changeover' && unavailable(action) && <small>{unavailable(action)}</small>}</button>)}{snapshot.umpirePending && <button className="court-action court-action--clear_umpire" disabled={busy || Boolean(unavailable('clear_umpire'))} onClick={() => void execute('clear_umpire')}><span className="court-action-title"><span aria-hidden="true">X</span>Clear official</span></button>}</div>
     {overrideOpen && snapshot.match.backendState && <dialog className="court-dialog" open><form onSubmit={submitOverride}><h2>Override score</h2><div className="override-teams">{([0, 1] as const).map((team) => <fieldset key={team}><legend>{snapshot.match.teams[team].join(' / ')}</legend><label>Sets<input name={`sets-${team}`} type="number" min="0" defaultValue={snapshot.match.backendState?.sets[team] ?? 0} /></label><label>Games<input name={`games-${team}`} type="number" min="0" defaultValue={snapshot.match.backendState?.games[team] ?? 0} /></label><label>Points<input name={`points-${team}`} type="number" min="0" defaultValue={snapshot.match.backendState?.points[team] ?? 0} /></label></fieldset>)}</div><label className="override-detail">Server<select name="server" defaultValue={`${snapshot.match.backendState.server_team}:${snapshot.match.backendState.server_player}`}>{snapshot.match.teams.map((team, teamIndex) => team.map((player, playerIndex) => <option key={`${teamIndex}:${playerIndex}`} value={`${teamIndex}:${playerIndex}`}>{player}</option>))}</select></label><div className="form-actions"><button type="button" className="button button--secondary" onClick={() => setOverrideOpen(false)}>Cancel</button><button type="submit" className="button button--primary" disabled={busy}>Apply override</button></div></form></dialog>}
   </footer>
 }

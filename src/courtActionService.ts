@@ -39,7 +39,7 @@ export const missingCourtHandlers: Record<CourtAction, string> = {
 
 export function umpireRequestStatus(snapshot: CourtSnapshot): string {
   if (!snapshot.umpirePending) return ''
-  return snapshot.umpireDelivery === 'queued' ? 'Pending delivery' : snapshot.umpireDelivery === 'delivered' || snapshot.umpireDelivery === 'local' || snapshot.umpireDelivery === undefined ? 'Umpire requested' : 'Delivery unconfirmed'
+  return snapshot.umpireDelivery === 'queued' ? 'Pending delivery' : snapshot.umpireDelivery === 'delivered' || snapshot.umpireDelivery === 'local' || snapshot.umpireDelivery === undefined ? 'Official requested' : 'Delivery unconfirmed'
 }
 
 export function courtActionUnavailable(action: CourtAction, snapshot: CourtSnapshot, service: CourtActionService): string {

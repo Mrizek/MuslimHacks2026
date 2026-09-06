@@ -136,8 +136,8 @@ export class LocalCourtService implements CourtActionService {
         case 'changeoverWarning':
           if (!state.changeover || state.changeover.warningIssued || secondsLeft(state.changeover, this.now()) > 10 || secondsLeft(state.changeover, this.now()) === 0) return { accepted: false, reason: 'Warning already issued or not due.' }
           state.changeover.warningIssued = true; description = 'Time'; break
-        case 'umpire': state.umpirePending = true; description = 'Umpire requested (recorded in this browser).'; break
-        case 'umpireResolve': state.umpirePending = false; description = 'Umpire request resolved.'; break
+        case 'umpire': state.umpirePending = true; description = 'Official requested (recorded in this browser).'; break
+        case 'umpireResolve': state.umpirePending = false; description = 'Official request resolved.'; break
         case 'clockEnable': record = { ...record, settings: { ...record.settings, serveClockEnabled: true } }; state.serveClock = freshClock(record); description = 'Serve clock enabled.'; break
         case 'clockReset': state.serveClock = freshClock(record); description = 'Serve clock reset.'; break
         case 'clockPause': state.serveClock = { ...state.serveClock, remainingSeconds: secondsLeft(state.serveClock, this.now()), endsAt: null }; description = 'Serve clock paused.'; break

@@ -30,6 +30,33 @@ function loadLocal<T>(key: string, fallback: T): T {
 
 function validSeconds(value: number) { return Number.isInteger(value) && value > 0 }
 
+function callTimeAlert() {
+  const beep = () => {
+    try {
+      const context = new AudioContext()
+      for (const offset of [0, 0.22, 0.44]) {
+        const oscillator = context.createOscillator()
+        const gain = context.createGain()
+        oscillator.connect(gain)
+        gain.connect(context.destination)
+        oscillator.frequency.value = 880
+        gain.gain.setValueAtTime(0.0001, context.currentTime + offset)
+        gain.gain.exponentialRampToValueAtTime(0.28, context.currentTime + offset + 0.01)
+        gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + offset + 0.14)
+        oscillator.start(context.currentTime + offset)
+        oscillator.stop(context.currentTime + offset + 0.15)
+      }
+    } catch {
+      /* audio output is optional */
+    }
+  }
+  window.speechSynthesis?.cancel()
+  if (window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') {
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance('Time'))
+  }
+  beep()
+}
+
 function loadSettings(): MatchSettings {
   const saved = loadLocal<Partial<MatchSettings> & { decidingTiebreak?: boolean }>('tennis-default-settings', {})
   return {
@@ -88,6 +115,7 @@ function ChangeoverDisplay({ match, sponsors, onClose, timer }: { match: Match; 
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [sponsorIndex, setSponsorIndex] = useState(0)
   const [mediaFailed, setMediaFailed] = useState(false)
+  const timeAlerted = useRef(timer?.warningIssued ?? false)
   const mediaRef = useRef<HTMLMediaElement>(null)
   const playableSponsors = (sponsors.length ? sponsors : loadLocal<Sponsor[]>('tennis-sponsors', [])).filter((sponsor) => sponsor.enabled)
   const sponsor = playableSponsors[sponsorIndex % Math.max(playableSponsors.length, 1)]
@@ -96,10 +124,16 @@ function ChangeoverDisplay({ match, sponsors, onClose, timer }: { match: Match; 
 
   useEffect(() => {
     if (match.settings.expressMode) return
-    const end = Date.now() + (timer?.remainingSeconds ?? match.settings.changeoverSeconds) * 1000
+    const restSeconds = timer?.remainingSeconds ?? match.settings.changeoverSeconds
+    const alertRemainingSeconds = match.settings.changeoverSeconds > 80 ? match.settings.changeoverSeconds - 80 : 0
+    const end = Date.now() + restSeconds * 1000
     const interval = window.setInterval(() => {
       const next = Math.max(0, Math.ceil((end - Date.now()) / 1000))
       setRemaining(next)
+      if (!timeAlerted.current && alertRemainingSeconds > 0 && next > 0 && next <= alertRemainingSeconds) {
+        timeAlerted.current = true
+        callTimeAlert()
+      }
       if (next === 0) { mediaRef.current?.pause(); window.clearInterval(interval) }
     }, 250)
     return () => window.clearInterval(interval)
@@ -141,6 +175,7 @@ function CourtDisplay({ court, match, sponsors = [], startChangeover = false, on
   const [preview, setPreview] = useState(startChangeover)
   const [snapshot, setSnapshot] = useState<CourtSnapshot>({ match, revision: '', umpirePending: Boolean(match.umpireRequested), canUndo: Boolean(match.backendState?.last_action), connected: false, initialSnapshotReady: false })
   const [voiceStatus, setVoiceStatus] = useState('Starting voice recognition...')
+  const [voiceListening, setVoiceListening] = useState(false)
   const snapshotRef = useRef(snapshot)
   const voiceRecognitionRef = useRef<ReturnType<typeof createVoiceRecognition>>(null)
   const displayRef = useRef<HTMLElement>(null)
@@ -171,7 +206,7 @@ function CourtDisplay({ court, match, sponsors = [], startChangeover = false, on
       }
     }
 
-    const recognition = createVoiceRecognition(handleVoiceAction, setVoiceStatus)
+    const recognition = createVoiceRecognition(handleVoiceAction, setVoiceStatus, setVoiceListening)
     if (!recognition) {
       setVoiceStatus('Voice recognition is not supported by this browser')
       return
@@ -179,11 +214,14 @@ function CourtDisplay({ court, match, sponsors = [], startChangeover = false, on
     voiceRecognitionRef.current = recognition
     try {
       recognition.start()
+      setVoiceListening(true)
     } catch {
+      setVoiceListening(false)
       setVoiceStatus('Click Start voice and allow microphone access')
     }
     return () => {
       recognition.stop()
+      setVoiceListening(false)
       voiceRecognitionRef.current = null
     }
   }, [court.id, match.id, onMatchUpdate, service])
@@ -191,11 +229,11 @@ function CourtDisplay({ court, match, sponsors = [], startChangeover = false, on
   const ready = Boolean(snapshot.connected && snapshot.initialSnapshotReady)
   const openFullscreen = async () => { try { await displayRef.current?.requestFullscreen() } catch { /* fullscreen requires user permission */ } }
   return <section ref={displayRef} className="court-display court-tablet" aria-label={`${court.name} tablet display`}>
-    <header className="display-bar"><div className="display-heading"><h2>{court.name}</h2><span>{current.format} / {current.status}</span></div><StatusPill label={ready ? 'Connected' : 'Connecting'} offline={!ready} showDot={false} /><div className="display-actions"><span className="voice-status" role="status">{voiceStatus}</span><button className="display-button" onClick={() => { try { voiceRecognitionRef.current?.start(); setVoiceStatus('Starting voice recognition...') } catch { setVoiceStatus('Microphone is already starting') } }}>Start voice</button><button className="display-button" onClick={openFullscreen}>Enter fullscreen</button><button className="display-button display-button--return" onClick={onClose}>Return</button></div></header>
+    <header className="display-bar"><div className="display-heading"><h2>{court.name}</h2><span>{current.format} / {current.status}</span></div><StatusPill label={ready ? 'Connected' : 'Connecting'} offline={!ready} showDot={false} /><div className="display-actions"><span className="voice-status" role="status">{voiceStatus}</span><button className="display-button" onClick={() => { if (voiceListening) { voiceRecognitionRef.current?.stop(); setVoiceListening(false); setVoiceStatus('Voice recognition stopped'); return } try { voiceRecognitionRef.current?.start(); setVoiceListening(true); setVoiceStatus('Starting voice recognition...') } catch { setVoiceStatus('Microphone is already starting') } }}>{voiceListening ? 'Stop voice' : 'Start voice'}</button><button className="display-button" onClick={openFullscreen}>Enter fullscreen</button><button className="display-button display-button--return" onClick={onClose}>Return</button></div></header>
     {snapshot.error && <p className="court-error" role="alert">{snapshot.error}</p>}
     {!snapshot.initialSnapshotReady && <p className="court-feedback" role="status">Waiting for backend match snapshot...</p>}
     <div className="court-play-area"><div className="display-match"><table className="display-score-table"><colgroup><col className="display-team-column" /><col /><col /><col /></colgroup><thead><tr><th scope="col">Teams</th><th scope="col">Sets</th><th scope="col">Games</th><th scope="col">Points</th></tr></thead><tbody>{current.teams.map((team, index) => <tr key={index}><th scope="row"><span className="court-team-label">Team {index + 1}</span>{team.map((player, playerIndex) => <span className="court-player" key={playerIndex}>{player}{serverMarker(current, index, playerIndex) && <span className="court-server"><span aria-hidden="true">S</span> Serving</span>}</span>)}</th>{(['sets', 'games', 'points'] as const).map((field) => <td key={field}><span className={field === 'points' ? 'court-points' : ''}>{current.scores[index][field]}</span></td>)}</tr>)}</tbody></table></div>
-    <aside className="serve-clock" aria-label="Match state"><span>{current.backendState?.in_tiebreak ? 'Tiebreak' : 'Server'}</span><strong>{serverInitials(current.server)}</strong><small>{current.umpireRequested ? 'Umpire requested' : current.status}</small></aside></div>
+    <aside className="serve-clock" aria-label="Match state"><span>{current.backendState?.in_tiebreak ? 'Tiebreak' : 'Server'}</span><strong>{serverInitials(current.server)}</strong><small>{current.umpireRequested ? 'Official requested' : current.status}</small></aside></div>
     {(preview || snapshot.timer?.phase === 'changeover') && <ChangeoverDisplay match={current} sponsors={sponsors} timer={snapshot.timer} onClose={preview ? () => setPreview(false) : undefined} />}
     <CourtControls court={court} snapshot={snapshot} service={service} onChangeover={() => setPreview((visible) => !visible)} onAccepted={(next) => { setSnapshot(next); onMatchUpdate(next.match) }} />
   </section>
@@ -208,7 +246,7 @@ function Scoreboard({ match }: { match: Match }) {
 function CourtCard({ court, match, index, onAssign, onDisplay, onEndMatch }: { court: Court; match?: Match; index: number; onAssign: () => void; onDisplay: () => void; onEndMatch: (match: Match) => void }) {
   const courtLabel = `Court ${index + 1}`
   if (!match) return <article className="court-card court-card--available"><div className="court-card__topline"><div><p className="eyebrow">{courtLabel} / {court.name}</p><h2>Ready for a match</h2></div><StatusPill label="Available" showDot={false} /></div><div className="available-state"><div className="court-mark" aria-hidden="true"><span /></div><p>No active match on this court. Previous completed matches stay in the database.</p><button type="button" className="button button--primary" onClick={onAssign}>Start new match <span aria-hidden="true">+</span></button><div className="connection-note"><StatusPill label={court.connection} offline={court.connection === 'Offline'} showDot={false} /></div></div></article>
-  return <article className={`court-card ${match.status === 'Live' ? 'court-card--live' : 'court-card--scheduled'} ${match.umpireRequested ? 'court-card--umpire' : ''}`}><div className="court-card__topline"><div><p className="eyebrow">{courtLabel} / {court.name}</p><h2>{teamTitle(match)}</h2></div><StatusPill label={match.status} live={match.status === 'Live'} /></div>{match.umpireRequested && <div className="umpire-alert" role="alert">Umpire requested</div>}<div className="match-meta"><span>{match.format} match</span><span className="match-meta__actions"><StatusPill label={court.connection} offline={court.connection === 'Offline'} showDot={false} /><button type="button" className="button button--danger" onClick={() => onEndMatch(match)}>End match</button></span></div><Scoreboard match={match} /><div className="live-details"><div><span>Current server</span><strong>{match.server}</strong></div><div><span>Umpire</span><strong className={match.umpireRequested ? 'danger-text' : ''}>{match.umpireRequested ? 'Requested' : 'Clear'}</strong></div><div><span>Court</span><strong>{court.name}</strong></div></div><div className="court-card__actions"><button type="button" className="button button--display" onClick={onDisplay}>Court display</button></div></article>
+  return <article className={`court-card ${match.status === 'Live' ? 'court-card--live' : 'court-card--scheduled'} ${match.umpireRequested ? 'court-card--umpire' : ''}`}><div className="court-card__topline"><div><p className="eyebrow">{courtLabel} / {court.name}</p><h2>{teamTitle(match)}</h2></div><StatusPill label={match.status} live={match.status === 'Live'} /></div>{match.umpireRequested && <div className="umpire-alert" role="alert">Official requested</div>}<div className="match-meta"><span>{match.format} match</span><span className="match-meta__actions"><StatusPill label={court.connection} offline={court.connection === 'Offline'} showDot={false} /><button type="button" className="button button--danger" onClick={() => onEndMatch(match)}>End match</button></span></div><Scoreboard match={match} /><div className="live-details"><div><span>Current server</span><strong>{match.server}</strong></div><div><span>Official</span><strong className={match.umpireRequested ? 'danger-text' : ''}>{match.umpireRequested ? 'Requested' : 'Clear'}</strong></div><div><span>Court</span><strong>{court.name}</strong></div></div><div className="court-card__actions"><button type="button" className="button button--display" onClick={onDisplay}>Court display</button></div></article>
 }
 
 function MatchForm({ courts, availableCourtIds, form, setForm, submitting, error, onSubmit, onCancel }: { courts: Court[]; availableCourtIds: (string | number)[]; form: FormState; setForm: (form: FormState) => void; submitting: boolean; error: string; onSubmit: () => void; onCancel: () => void }) {

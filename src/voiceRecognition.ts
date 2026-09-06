@@ -6,6 +6,7 @@ type SpeechRecognitionInstance = {
   continuous: boolean
   interimResults: boolean
   lang: string
+  onstart: (() => void) | null
   onend: (() => void) | null
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
   onresult: ((event: SpeechRecognitionEventLike) => void) | null
@@ -29,7 +30,7 @@ export function voiceActionFromTranscript(transcript: string): VoiceAction | nul
   return null
 }
 
-export function createVoiceRecognition(onAction: (action: VoiceAction) => void, onStatus: (status: string) => void) {
+export function createVoiceRecognition(onAction: (action: VoiceAction) => void, onStatus: (status: string) => void, onListening?: (listening: boolean) => void) {
   const browserWindow = window as BrowserWindow
   const Recognition = browserWindow.SpeechRecognition || browserWindow.webkitSpeechRecognition
   if (!Recognition) return null
@@ -38,13 +39,23 @@ export function createVoiceRecognition(onAction: (action: VoiceAction) => void, 
   recognition.continuous = true
   recognition.interimResults = false
   recognition.lang = 'en-US'
+  recognition.onstart = () => {
+    onListening?.(true)
+    onStatus('Voice recognition on')
+  }
   recognition.onresult = (event) => {
     const transcript = event.results[event.results.length - 1][0].transcript.trim()
     const action = voiceActionFromTranscript(transcript)
     onStatus(action ? `Heard: ${transcript}` : `Heard but not a command: ${transcript}`)
     if (action) onAction(action)
   }
-  recognition.onerror = (event) => onStatus(event.error === 'not-allowed' ? 'Microphone permission is required' : `Voice error: ${event.error}`)
-  recognition.onend = () => onStatus('Voice recognition stopped')
+  recognition.onerror = (event) => {
+    if (event.error === 'not-allowed') onListening?.(false)
+    onStatus(event.error === 'not-allowed' ? 'Microphone permission is required' : `Voice error: ${event.error}`)
+  }
+  recognition.onend = () => {
+    onListening?.(false)
+    onStatus('Voice recognition stopped')
+  }
   return recognition
 }
