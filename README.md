@@ -1,335 +1,269 @@
-# CourtSide AI Backend
+# CourtSide AI
 
-Django, Firestore, and WebSocket backend for the CourtSide AI tennis-scoring
-demo. The standalone engine handles points, games, sets, No-Ad, doubles player
-order, tiebreaks, overrides, and umpire requests.
+CourtSide AI is a local tennis tournament app with a Vite React frontend and a Django Channels backend. The frontend uses Django REST endpoints for courts and matches, then uses WebSockets for live scoring and dashboard updates.
 
-## Setup
+## What Is In This Repo
+
+- Frontend: Vite + React + TypeScript in `src/`, started with `npm run dev`.
+- Backend: Django + Channels in `courtside_backend/` and `matches/`, started with Daphne.
+- Scoring engine: pure Python in `scoring_engine/`. The frontend does not calculate tennis scores.
+- Persistence: Firestore through Firebase Admin on the backend only.
+- WebSockets: single-process `InMemoryChannelLayer`, so run one Daphne process for local development.
+
+## Prerequisites
+
+Install these first:
+
+- Python 3.11 or newer
+- Node.js 22 or newer
+- npm
+- A Firebase service-account JSON file for the Firestore project
+
+Keep the Firebase service-account JSON outside this repository. Do not put Firebase Admin credentials in the frontend env file.
+
+## Install Dependencies
+
+Open Windows PowerShell in the repo root:
+
+```powershell
+cd "C:\Users\rayan\OneDrive\Bureau\muslimhacks\MuslimHacks2026"
+```
+
+Install Python dependencies:
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-py -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-Create `.env` in the project root:
-
-```dotenv
-DJANGO_SECRET_KEY=local-demo-only
-DJANGO_DEBUG=true
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
-FIREBASE_PROJECT_ID=your-firebase-project-id
-GOOGLE_APPLICATION_CREDENTIALS=D:\path\to\firebase-service-account.json
-```
-
-Settings loads this file automatically with `python-dotenv`. Keep the service
-account file outside the repository and never commit it.
-
-Start one ASGI server process:
+Install frontend dependencies:
 
 ```powershell
+npm install
+```
+
+## Environment Files
+
+Create the backend env file at the repo root:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+Example `.env`:
+
+```dotenv
+DJANGO_SECRET_KEY=local-demo-only-change-me
+DJANGO_DEBUG=true
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+DJANGO_CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+FIREBASE_PROJECT_ID=your-firebase-project-id
+GOOGLE_APPLICATION_CREDENTIALS=C:\absolute\path\outside\this\repo\firebase-service-account.json
+```
+
+Create the frontend env file at the repo root:
+
+```powershell
+Copy-Item .env.local.example .env.local
+notepad .env.local
+```
+
+Example `.env.local`:
+
+```dotenv
+VITE_COURTSIDE_API_BASE_URL=http://127.0.0.1:8000/api
+VITE_COURTSIDE_WS_BASE_URL=ws://127.0.0.1:8000/ws
+```
+
+Vite only exposes variables that start with `VITE_`. Do not add Firebase Admin credentials to `.env.local`.
+
+## Start The App
+
+Use two separate PowerShell terminals.
+
+Terminal 1, backend:
+
+```powershell
+cd "C:\Users\rayan\OneDrive\Bureau\muslimhacks\MuslimHacks2026"
+.\.venv\Scripts\Activate.ps1
 python -B -m daphne -b 127.0.0.1 -p 8000 courtside_backend.asgi:application
 ```
 
-Health check: `http://127.0.0.1:8000/api/health/`
-
-Interactive Swagger UI: `http://127.0.0.1:8000/api/docs/`
-
-Use **Try it out** in Swagger to run the court and match GET/POST requests. The
-OpenAPI JSON is available at `http://127.0.0.1:8000/api/schema/` and can be
-imported into SwaggerHub.
-
-## Create a Match
-
-No Authorization header is needed for this local demo.
-
-First, create a court in Postman:
-
-```http
-POST http://127.0.0.1:8000/api/courts/
-Content-Type: application/json
-```
-
-```json
-{"name":"Court 1"}
-```
-
-Copy the returned `id`, then create a match.
-
-Singles example, with one player on each team:
-
-```http
-POST http://127.0.0.1:8000/api/matches/
-Content-Type: application/json
-```
-
-```json
-{
-  "court_id": "PASTE_COURT_ID_HERE",
-  "teams": [
-    {"name": "Team North", "players": ["Nadia"]},
-    {"name": "Team South", "players": ["Sami"]}
-  ],
-  "match_type": "singles",
-  "config": {
-    "no_ad": false,
-    "games_per_set": 6,
-    "tiebreak_at": 6,
-    "tiebreak_points": 7,
-    "sets_to_win": 1,
-    "starting_server_team": 0,
-    "starting_server_player": 0,
-    "serving_orders": {"team_0": [0], "team_1": [0]},
-    "receiving_orders": {"team_0": [0], "team_1": [0]}
-  }
-}
-```
-
-Doubles example, with two players on each team:
-
-```http
-POST http://127.0.0.1:8000/api/matches/
-Content-Type: application/json
-```
-
-```json
-{
-  "court_id": "PASTE_COURT_ID_HERE",
-  "teams": [
-    {"name": "Team North", "players": ["Nadia", "Noor"]},
-    {"name": "Team South", "players": ["Sami", "Sara"]}
-  ],
-  "match_type": "doubles",
-  "config": {
-    "no_ad": false,
-    "games_per_set": 6,
-    "tiebreak_at": 6,
-    "tiebreak_points": 7,
-    "sets_to_win": 2,
-    "starting_server_team": 0,
-    "starting_server_player": 1,
-    "serving_orders": {"team_0": [1, 0], "team_1": [0, 1]},
-    "receiving_orders": {"team_0": [0, 1], "team_1": [1, 0]}
-  }
-}
-```
-
-Copy the returned `match_id`. You can retrieve it with:
-
-```http
-GET http://127.0.0.1:8000/api/matches/PASTE_MATCH_ID_HERE/
-```
-
-Delete one match:
-
-```http
-DELETE http://127.0.0.1:8000/api/matches/PASTE_MATCH_ID_HERE/
-```
-
-Delete a court and all matches on that court:
-
-```http
-DELETE http://127.0.0.1:8000/api/courts/PASTE_COURT_ID_HERE/
-```
-
-## Match Config Options
-
-All config fields are optional inside the `config` object. If a field is
-omitted, the backend uses the default shown here.
-
-| Field | Default | Allowed values | Description |
-| --- | --- | --- | --- |
-| `no_ad` | `false` | `true` or `false` | If `true`, the next point wins the game at 40-40. |
-| `games_per_set` | `6` | integer `>= 1` | Games needed to win a set, still requiring a two-game margin unless a tiebreak is reached. |
-| `tiebreak_at` | `6` | integer `>= games_per_set` | Starts a tiebreak when the set score reaches this value for both teams. |
-| `tiebreak_points` | `7` | `7` or `10` | Points needed to win a normal tiebreak, with a two-point margin. |
-| `sets_to_win` | `1` | integer `>= 1` | Sets needed to win the match. |
-| `starting_server_team` | `0` | `0` or `1` | Team that serves first. |
-| `starting_server_player` | `0` | valid player slot | Player slot that serves first: singles uses `0`; doubles uses `0` or `1`. |
-| `serving_orders` | `{"team_0":[0],"team_1":[0]}` | each team lists every player slot once | Service order per team. Singles uses `[0]`; doubles uses `[0,1]` or `[1,0]`. |
-| `receiving_orders` | `{"team_0":[0],"team_1":[0]}` | each team lists every player slot once | Receiving order per team. Singles uses `[0]`; doubles uses `[0,1]` or `[1,0]`. |
-
-## Open a Match WebSocket
-
-Use Postman instead of the browser developer tools:
-
-1. Start the backend with Daphne.
-2. In Postman, select **New** then **WebSocket**.
-3. Enter `ws://127.0.0.1:8000/ws/matches/PASTE_MATCH_ID_HERE/`.
-4. Click **Connect**.
-5. Postman immediately receives a `match_snapshot` message.
-6. Paste one of the JSON commands below into the **Message** box and click
-   **Send**.
-
-Each command needs a fresh UUID string in `action_id`. A successful mutating
-command sends `action_ack`, followed by `match_updated` to every client watching
-that match.
-
-## Match WebSocket Commands
-
-Score a point for team `0` or team `1`:
-
-```json
-{
-  "type": "score_point",
-  "action_id": "11111111-1111-4111-8111-111111111111",
-  "payload": {"winner_team": 0}
-}
-```
-
-Ask for an umpire:
-
-```json
-{
-  "type": "request_umpire",
-  "action_id": "22222222-2222-4222-8222-222222222222",
-  "payload": {}
-}
-```
-
-Clear the umpire request:
-
-```json
-{
-  "type": "clear_umpire_request",
-  "action_id": "33333333-3333-4333-8333-333333333333",
-  "payload": {}
-}
-```
-
-Undo the latest saved action:
-
-```json
-{
-  "type": "undo",
-  "action_id": "44444444-4444-4444-8444-444444444444",
-  "payload": {}
-}
-```
-
-Override match state:
-
-```json
-{
-  "type": "override",
-  "action_id": "55555555-5555-4555-8555-555555555555",
-  "payload": {
-    "changes": {
-      "games": [4, 3],
-      "points": [3, 2],
-      "point_number": 5,
-      "server_team": 1,
-      "server_player": 0
-    }
-  }
-}
-```
-
-Read the latest match state:
-
-```json
-{
-  "type": "get_state",
-  "action_id": "66666666-6666-4666-8666-666666666666"
-}
-```
-
-Override changes may include these state fields: `points`, `games`, `sets`,
-`completed_sets`, `server_team`, `server_player`, `receiver_team`,
-`receiver_player`, `game_number`, `point_number`, `in_tiebreak`,
-`tiebreak_initial_server_team`, `tiebreak_initial_server_player`,
-`umpire_requested`, `status`, and `winner_team`. The backend validates the full
-state after applying the override.
-
-## Interactive WebSocket Commands
-
-The match WebSocket also accepts these raw text commands in Postman. Paste one
-line into the WebSocket **Message** box and click **Send**:
-
-```text
-point 0              Give the next point to team 0
-point 1              Give the next point to team 1
-undo                 Undo the latest action
-umpire               Request an umpire
-clear-umpire         Clear the umpire request
-override games 4 3   Set current games to 4-3
-override points 3 3  Set raw points to 3-3, displayed as 40-40
-show                 Print the current scoreboard
-```
-
-For raw text commands, the backend generates the `action_id`. Mutating commands
-return `action_ack` and then `match_updated`; `show` returns a `match_snapshot`.
-
-## Dashboard WebSocket
-
-Dashboard clients connect in Postman to:
-
-```text
-ws://127.0.0.1:8000/ws/dashboard/
-```
-
-The dashboard socket immediately receives all match snapshots and receives
-`match_updated` whenever any match changes. It supports only `get_state`:
-
-```json
-{
-  "type": "get_state",
-  "action_id": "77777777-7777-4777-8777-777777777777"
-}
-```
-
-## Interactive Match Script
-
-The same commands can be run without WebSockets in the local interactive
-scoring script:
+Terminal 2, frontend:
 
 ```powershell
-python -B tests/interactive_match.py
+cd "C:\Users\rayan\OneDrive\Bureau\muslimhacks\MuslimHacks2026"
+npm run dev -- --host=127.0.0.1
 ```
 
-## Tests
+Open the React frontend:
+
+```text
+http://127.0.0.1:5173/
+```
+
+Backend health check:
+
+```text
+http://127.0.0.1:8000/api/health/
+```
+
+Backend API docs:
+
+```text
+http://127.0.0.1:8000/api/docs/
+```
+
+There is one browser frontend in this repo: the Vite React app at `http://127.0.0.1:5173/`.
+
+## Same Wi-Fi Device Access
+
+Find the backend computer's LAN IP:
 
 ```powershell
-python -B manage.py test tests -v 2
-python -B manage.py check
+Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress -like "192.168.*" -or $_.IPAddress -like "10.*" -or $_.IPAddress -like "172.*"} | Select-Object IPAddress,InterfaceAlias
 ```
 
-## Demo Security
+Suppose the LAN IP is `192.168.1.25`.
 
-REST and WebSocket authentication are currently disabled. Anyone who can reach
-these endpoints can read match data, create courts and matches, score points,
-request or clear an umpire, and perform overrides. Use this configuration only
-for local testing. Firebase Admin credentials are still required for Django to
-access Firestore.
-# React + TypeScript + Vite
+Update `.env`:
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+```dotenv
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.25
+DJANGO_CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://192.168.1.25:5173
+```
 
-Currently, two official plugins are available:
+Update `.env.local`:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```dotenv
+VITE_COURTSIDE_API_BASE_URL=http://192.168.1.25:8000/api
+VITE_COURTSIDE_WS_BASE_URL=ws://192.168.1.25:8000/ws
+```
 
-## React Compiler
+Start the backend and frontend on all interfaces:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```powershell
+python -B -m daphne -b 0.0.0.0 -p 8000 courtside_backend.asgi:application
+```
 
-## Expanding the Oxlint configuration
+```powershell
+npm run dev -- --host=0.0.0.0
+```
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+On another phone, tablet, emulator, or computer on the same Wi-Fi, open:
+
+```text
+http://192.168.1.25:5173/
+```
+
+If Windows Firewall asks, allow Python and Node.js on private networks.
+
+## Walkthrough
+
+1. Open `http://127.0.0.1:5173/`.
+2. The Courts tab uses two backend court slots: `Court 1` and `Court 2`. If fewer than two court documents exist, the app creates the missing court records when Firestore is reachable.
+3. Click `Start new match` on an available court.
+4. Enter player names, choose singles or doubles, choose the initial server, and start the match.
+5. Click `Court display`.
+6. Wait for `Connected`. The display is restored from `/ws/matches/{match_id}/`.
+7. Use `Point Team 1` or `Point Team 2`. The command goes through the match WebSocket and Django's Python scoring engine returns the new score.
+8. Return to the dashboard. The court card updates through `/ws/dashboard/`.
+9. When the backend marks a match complete, that court becomes available again and the old completed match remains in Firestore and in the Matches tab history.
+10. Refresh the page or close and reopen the court display. The UI restores from the backend snapshot instead of local mock data.
+
+## Backend Contracts Used By The Frontend
+
+REST:
+
+- `GET /api/courts/`
+- `POST /api/courts/`
+- `GET /api/matches/`
+- `POST /api/matches/`
+
+Match WebSocket:
+
+- URL: `/ws/matches/{match_id}/`
+- Receives: `match_snapshot`, `match_updated`, `action_ack`, `error`
+- Sends scoring command:
 
 ```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+{"type":"score_point","action_id":"UUID-HERE","payload":{"winner_team":0}}
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+- Sends umpire commands:
+
+```json
+{"type":"request_umpire","action_id":"UUID-HERE","payload":{}}
+{"type":"clear_umpire_request","action_id":"UUID-HERE","payload":{}}
+{"type":"undo","action_id":"UUID-HERE","payload":{}}
+```
+
+Dashboard WebSocket:
+
+- URL: `/ws/dashboard/`
+- Receives dashboard snapshots and match updates across courts.
+- The frontend does not send scoring commands through this socket.
+
+## Troubleshooting
+
+If the frontend says it cannot load backend data:
+
+- Make sure Daphne is running on port `8000`.
+- Open `http://127.0.0.1:8000/api/health/`.
+- Check `.env.local` points to the same backend host and port.
+
+If WebSocket scoring stays disconnected:
+
+- Check `VITE_COURTSIDE_WS_BASE_URL`.
+- Use `ws://...` for local HTTP development, not `wss://...`.
+- Restart `npm run dev` after editing `.env.local`.
+
+If the browser reports CORS errors:
+
+- Add the exact frontend origin to `DJANGO_CORS_ALLOWED_ORIGINS`.
+- For localhost, include `http://localhost:5173` and `http://127.0.0.1:5173`.
+- For another device, include `http://YOUR-LAN-IP:5173`.
+- Restart Daphne after editing `.env`.
+
+If Django reports `DisallowedHost`:
+
+- Add the backend hostname or LAN IP to `DJANGO_ALLOWED_HOSTS`.
+- Restart Daphne.
+
+If Firestore writes fail:
+
+- Confirm `GOOGLE_APPLICATION_CREDENTIALS` is an absolute path to a real service-account JSON file.
+- Confirm `FIREBASE_PROJECT_ID` matches that service account's project.
+- Confirm the computer has internet access to Google Firestore.
+- Keep the credential path in backend `.env` only.
+
+If URLs are wrong from a phone or emulator:
+
+- Do not use `127.0.0.1` on the phone unless the backend is running inside that same device/emulator.
+- Use the backend computer's LAN IP in `.env.local`.
+- Restart the Vite server after changing `.env.local`.
+
+## Verification Run
+
+Automated checks run in this workspace:
+
+```powershell
+npm run build
+npm run lint
+node --test tests\courtActionService.test.mjs
+python manage.py test tests.test_backend tests.test_scoring_engine
+```
+
+Results:
+
+- Frontend TypeScript production build passed.
+- Frontend lint passed.
+- Frontend REST/WebSocket contract test passed.
+- Django backend and scoring tests passed: 25 tests.
+
+Live Daphne smoke:
+
+- `GET /api/health/` returned `200`.
+- Creating a temporary court through Firestore could not complete in this environment because the sandbox could not connect to Google Firestore. The backend tests verify the REST and WebSocket contracts with the in-memory repository.
