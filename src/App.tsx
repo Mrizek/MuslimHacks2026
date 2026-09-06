@@ -7,6 +7,7 @@ import { courtActionService, type CourtActionService, type CourtSnapshot, type M
 import { backendMatchService, localChangeRequestService, matchFromBackend } from './matchService'
 import type { BackendMatchSnapshot, Court, Match, MatchFormat, MatchSettings, PendingChangeRequest, Sponsor, SponsorMediaType } from './types'
 import { tournamentConfig } from './types'
+import { createVoiceRecognition, type VoiceAction } from './voiceRecognition'
 
 const tabs = ['Courts', 'Matches', 'Rules', 'Sponsors']
 const requiredCourtNames = ['Court 1', 'Court 2']
@@ -109,15 +110,58 @@ function ChangeoverDisplay({ match, sponsors, onClose, timer }: { match: Match; 
 function CourtDisplay({ court, match, sponsors = [], startChangeover = false, onClose, onMatchUpdate, service = courtActionService }: { court: Court; match: Match; sponsors?: Sponsor[]; startChangeover?: boolean; onClose: () => void; onMatchUpdate: (match: Match) => void; service?: CourtActionService }) {
   const [preview, setPreview] = useState(startChangeover)
   const [snapshot, setSnapshot] = useState<CourtSnapshot>({ match, revision: '', umpirePending: Boolean(match.umpireRequested), canUndo: Boolean(match.backendState?.last_action), connected: false, initialSnapshotReady: false })
+  const [voiceStatus, setVoiceStatus] = useState('Starting voice recognition...')
+  const snapshotRef = useRef(snapshot)
+  const voiceRecognitionRef = useRef<ReturnType<typeof createVoiceRecognition>>(null)
   const displayRef = useRef<HTMLElement>(null)
+  snapshotRef.current = snapshot
   useEffect(() => {
     return service.subscribe(court.id, match.id, (next) => { setSnapshot(next); onMatchUpdate(next.match) })
   }, [court.id, match.id, service, onMatchUpdate])
+  useEffect(() => {
+    const handleVoiceAction = async (action: VoiceAction) => {
+      const currentSnapshot = snapshotRef.current
+      if (!currentSnapshot.connected || !currentSnapshot.initialSnapshotReady) {
+        setVoiceStatus('Voice ready; waiting for the match connection')
+        return
+      }
+      const result = await service.execute({
+        courtId: court.id,
+        matchId: match.id,
+        expectedRevision: currentSnapshot.revision,
+        requestId: crypto.randomUUID(),
+        action,
+      } as never)
+      if (result.accepted) {
+        setSnapshot(result.snapshot)
+        onMatchUpdate(result.snapshot.match)
+        setVoiceStatus(`Accepted voice command: ${action.replaceAll('_', ' ')}`)
+      } else {
+        setVoiceStatus(result.reason)
+      }
+    }
+
+    const recognition = createVoiceRecognition(handleVoiceAction, setVoiceStatus)
+    if (!recognition) {
+      setVoiceStatus('Voice recognition is not supported by this browser')
+      return
+    }
+    voiceRecognitionRef.current = recognition
+    try {
+      recognition.start()
+    } catch {
+      setVoiceStatus('Click Start voice and allow microphone access')
+    }
+    return () => {
+      recognition.stop()
+      voiceRecognitionRef.current = null
+    }
+  }, [court.id, match.id, onMatchUpdate, service])
   const current = snapshot.match
   const ready = snapshot.connected && snapshot.initialSnapshotReady
   const openFullscreen = async () => { try { await displayRef.current?.requestFullscreen() } catch { /* fullscreen requires user permission */ } }
   return <section ref={displayRef} className="court-display court-tablet" aria-label={`${court.name} tablet display`}>
-    <header className="display-bar"><div className="display-heading"><h2>{court.name}</h2><span>{current.format} / {current.status}</span></div><StatusPill label={ready ? 'Connected' : 'Connecting'} offline={!ready} showDot={false} /><div className="display-actions"><button className="display-button" onClick={openFullscreen}>Enter fullscreen</button><button className="display-button display-button--return" onClick={onClose}>Return</button></div></header>
+    <header className="display-bar"><div className="display-heading"><h2>{court.name}</h2><span>{current.format} / {current.status}</span></div><StatusPill label={ready ? 'Connected' : 'Connecting'} offline={!ready} showDot={false} /><div className="display-actions"><span className="voice-status" role="status">{voiceStatus}</span><button className="display-button" onClick={() => { try { voiceRecognitionRef.current?.start(); setVoiceStatus('Starting voice recognition...') } catch { setVoiceStatus('Microphone is already starting') } }}>Start voice</button><button className="display-button" onClick={openFullscreen}>Enter fullscreen</button><button className="display-button display-button--return" onClick={onClose}>Return</button></div></header>
     {snapshot.error && <p className="court-error" role="alert">{snapshot.error}</p>}
     {!snapshot.initialSnapshotReady && <p className="court-feedback" role="status">Waiting for backend match snapshot...</p>}
     <div className="court-play-area"><div className="display-match"><table className="display-score-table"><colgroup><col className="display-team-column" /><col /><col /><col /></colgroup><thead><tr><th scope="col">Teams</th><th scope="col">Sets</th><th scope="col">Games</th><th scope="col">Points</th></tr></thead><tbody>{current.teams.map((team, index) => <tr key={index}><th scope="row"><span className="court-team-label">Team {index + 1}</span>{team.map((player, playerIndex) => <span className="court-player" key={playerIndex}>{player}{player === current.server && <span className="court-server"><span aria-hidden="true">S</span> Serving</span>}</span>)}</th>{(['sets', 'games', 'points'] as const).map((field) => <td key={field}><span className={field === 'points' ? 'court-points' : ''}>{current.scores[index][field]}</span></td>)}</tr>)}</tbody></table></div>
