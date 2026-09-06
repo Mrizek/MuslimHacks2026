@@ -30,6 +30,7 @@
 .court-action-title{display:flex;align-items:center;justify-content:center;gap:10px}.court-action-title>span{font-size:32px;flex-shrink:0}
 .court-action small{display:block;margin-top:8px;font-size:14px;line-height:1.3;font-weight:700}
 .court-action--correction{background:#ffc247;color:#201500}.court-action--override{background:#713bc1}.court-action--changeover{background:#145abb}.court-action--umpire{background:#b92332}
+.court-score-grid{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:20px}.court-action--score-team-0,.court-action--score-team-1{background:#d6ff5f;color:#07120e}.court-action--clear_umpire{background:#2e8053}
 .court-action:disabled{cursor:not-allowed;opacity:1;border-color:#a5b0ac;border-style:dashed}
 .court-action:not(:disabled):active{transform:translateY(2px)}
 .court-tablet .changeover{position:relative;flex:none;padding:20px;border:1px solid #536858;gap:12px}

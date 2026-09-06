@@ -1,28 +1,29 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
-import { courtActionService, missingCourtHandlers } from '../src/courtActionService.ts'
 
-for (const action of ['correction', 'override', 'changeover', 'umpire']) {
-  test(`${action} stays unavailable and cannot report a successful mutation`, async () => {
-    const command = {
-      action, courtId: 1, matchId: 'match-001', expectedRevision: '1', requestId: action,
-      ...(action === 'override' ? { proposed: { scores: [{ sets: '1', games: '3', points: '40' }, { sets: '0', games: '2', points: '30' }], server: 'A. Rivera' }, reason: 'Score entered incorrectly' } : {}),
-    }
-    const before = structuredClone(command)
-    assert.ok(!courtActionService.capabilities[action])
-    assert.equal(courtActionService.unavailableReasons[action], missingCourtHandlers[action])
-    const results = await Promise.all([courtActionService.execute(command), courtActionService.execute(command)])
-    for (const result of results) assert.deepEqual(result, { accepted: false, reason: missingCourtHandlers[action] })
-    assert.deepEqual(command, before)
-  })
-}
+const root = process.cwd()
+const courtActionSource = readFileSync(join(root, 'src', 'courtActionService.ts'), 'utf8')
+const matchServiceSource = readFileSync(join(root, 'src', 'matchService.ts'), 'utf8')
+const configSource = readFileSync(join(root, 'src', 'config.ts'), 'utf8')
 
-test('unconnected subscriptions never fabricate match or timer snapshots', async () => {
-  const snapshots = []
-  const unsubscribe1 = courtActionService.subscribe(1, 'match-001', (snapshot) => snapshots.push(snapshot))
-  const unsubscribe2 = courtActionService.subscribe(2, 'match-002', (snapshot) => snapshots.push(snapshot))
-  await courtActionService.execute({ action: 'changeover', courtId: 1, matchId: 'match-001', expectedRevision: '1', requestId: 'changeover' })
-  unsubscribe1()
-  unsubscribe2()
-  assert.deepEqual(snapshots, [])
+test('frontend uses the backend WebSocket contracts', () => {
+  assert.match(courtActionSource, /wsBaseUrl/)
+  assert.match(courtActionSource, /\/matches\/\$\{matchId\}\//)
+  assert.match(courtActionSource, /score_point/)
+  assert.match(courtActionSource, /request_umpire/)
+  assert.match(courtActionSource, /clear_umpire_request/)
+})
+
+test('frontend uses the backend REST contracts', () => {
+  assert.match(matchServiceSource, /\/courts\//)
+  assert.match(matchServiceSource, /\/matches\//)
+  assert.match(matchServiceSource, /court_id/)
+  assert.match(matchServiceSource, /match_type/)
+})
+
+test('frontend keeps API and WebSocket base URLs centralized in Vite env config', () => {
+  assert.match(configSource, /VITE_COURTSIDE_API_BASE_URL/)
+  assert.match(configSource, /VITE_COURTSIDE_WS_BASE_URL/)
 })
