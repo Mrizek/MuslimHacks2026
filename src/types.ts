@@ -1,9 +1,9 @@
 export type MatchFormat = 'Singles' | 'Doubles' | 'Mixed doubles'
-export type MatchSettings = { noAd: boolean; decidingTiebreak: boolean; expressMode: boolean; serveClockEnabled: boolean; serveClockSeconds: number; changeoverSeconds: number }
+export type MatchSettings = { noAd: boolean; tiebreakPoints: 7 | 10; gamesPerSet: number; tiebreakAt: number; setsToWin: number; expressMode: boolean; serveClockEnabled: boolean; serveClockSeconds: number; changeoverSeconds: number; decidingTiebreak?: boolean }
 export type MatchScore = { sets: string; games: string; points: string }
 export type BackendMatchStatus = 'in_progress' | 'complete'
-export type Match = { id: string; courtId: string; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings; status: 'Live' | 'Scheduled' | 'Complete'; scores: [MatchScore, MatchScore]; setHistory?: string[][]; umpireRequested?: boolean; backendState?: BackendMatchState }
-export type Court = { id: string; name: string; connection: 'Connected' | 'Offline' }
+export type Match = { id: string; courtId: string | number; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings; status: 'Live' | 'Scheduled' | 'Complete'; scores: [MatchScore, MatchScore]; setHistory?: string[][]; umpireRequested?: boolean; backendState?: BackendMatchState; localState?: any }
+export type Court = { id: string | number; name: string; connection: 'Connected' | 'Offline' | 'Local demo' }
 export type PendingChangeRequest = { id: string; matchIds: string[]; requestedSettings: MatchSettings; status: 'Pending court confirmation'; createdAt: string }
 export type SponsorMediaType = 'Image' | 'Video' | 'Audio'
 export type Sponsor = { id: string; name: string; mediaType: SponsorMediaType; mediaUrl: string; imageDurationSeconds: number; enabled: boolean }
@@ -61,4 +61,5 @@ export type BackendMatchSnapshot = {
   config: BackendMatchConfig
   state: BackendMatchState
   display_score: BackendDisplayScore
+  can_undo?: boolean
 }

@@ -1,12 +1,12 @@
 import { courtsideConfig } from './config'
 import type { BackendMatchSnapshot, Court, Match, MatchFormat, MatchSettings, PendingChangeRequest } from './types'
 
-export type CreateMatchInput = { courtId: string; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings }
-export interface MatchService { listCourts(): Promise<Court[]>; createCourt(name: string): Promise<Court>; listMatches(): Promise<Match[]>; createScheduledMatch(input: CreateMatchInput): Promise<Match> }
+export type CreateMatchInput = { courtId: string | number; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings }
+export interface MatchService { listCourts?(): Promise<Court[]>; createCourt?(name: string): Promise<Court>; listMatches?(): Promise<Match[]>; createScheduledMatch(input: CreateMatchInput): Promise<Match> }
 export interface ChangeRequestService { createChangeRequest(matchIds: string[], requestedSettings: MatchSettings): Promise<PendingChangeRequest> }
 
 type ApiError = { message?: string; code?: string }
-const defaultSettings: MatchSettings = { noAd: false, decidingTiebreak: true, expressMode: false, serveClockEnabled: true, serveClockSeconds: 25, changeoverSeconds: 90 }
+const defaultSettings: MatchSettings = { noAd: false, tiebreakPoints: 7, gamesPerSet: 6, tiebreakAt: 6, setsToWin: 1, expressMode: false, serveClockEnabled: true, serveClockSeconds: 25, changeoverSeconds: 90 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${courtsideConfig.apiBaseUrl}${path}`, {
@@ -33,7 +33,7 @@ export function matchFromBackend(snapshot: BackendMatchSnapshot): Match {
     format: formatFromBackend(snapshot.match_type),
     teams: snapshot.teams.map((team) => team.players) as [string[], string[]],
     server: snapshot.display_score.server,
-    settings: { ...defaultSettings, noAd: snapshot.config.no_ad, decidingTiebreak: snapshot.config.tiebreak_points === 10 },
+    settings: { ...defaultSettings, noAd: snapshot.config.no_ad, gamesPerSet: snapshot.config.games_per_set, tiebreakAt: snapshot.config.tiebreak_at, tiebreakPoints: snapshot.config.tiebreak_points, setsToWin: snapshot.config.sets_to_win },
     status: snapshot.state.status === 'complete' ? 'Complete' : 'Live',
     scores: [
       { sets: String(snapshot.display_score.sets[0]), games: String(snapshot.display_score.games[0]), points: snapshot.display_score.points[0] },
@@ -52,7 +52,7 @@ function createMatchPayload(input: CreateMatchInput) {
   const serverPlayer = Math.max(0, input.teams[serverTeam].indexOf(input.server))
   const order = Array.from({ length: teamSize }, (_, index) => index)
   return {
-    court_id: input.courtId,
+    court_id: String(input.courtId),
     teams: input.teams.map((players, teamIndex) => ({
       name: `Team ${teamIndex + 1}`,
       players: players.slice(0, teamSize),
@@ -60,10 +60,10 @@ function createMatchPayload(input: CreateMatchInput) {
     match_type: isSingles ? 'singles' : 'doubles',
     config: {
       no_ad: input.settings.noAd,
-      games_per_set: 6,
-      tiebreak_at: 6,
-      tiebreak_points: input.settings.decidingTiebreak ? 10 : 7,
-      sets_to_win: isSingles ? 1 : 2,
+      games_per_set: input.settings.gamesPerSet,
+      tiebreak_at: input.settings.tiebreakAt,
+      tiebreak_points: input.settings.tiebreakPoints,
+      sets_to_win: input.settings.setsToWin,
       starting_server_team: serverTeam,
       starting_server_player: serverPlayer,
       serving_orders: { team_0: order, team_1: order },
@@ -72,7 +72,7 @@ function createMatchPayload(input: CreateMatchInput) {
   }
 }
 
-export const backendMatchService: MatchService = {
+export const backendMatchService: Required<MatchService> = {
   listCourts: async () => {
     const data = await request<{ courts: { id: string; name: string }[] }>('/courts/')
     return data.courts.map((court) => ({ ...court, connection: 'Connected' }))
@@ -89,6 +89,15 @@ export const backendMatchService: MatchService = {
     const snapshot = await request<BackendMatchSnapshot>('/matches/', { method: 'POST', body: JSON.stringify(createMatchPayload(input)) })
     return matchFromBackend(snapshot)
   },
+}
+
+export const localMatchService: MatchService = {
+  createScheduledMatch: async (input) => ({
+    id: `match-${crypto.randomUUID()}`,
+    ...input,
+    status: 'Scheduled',
+    scores: [{ sets: '-', games: '-', points: '-' }, { sets: '-', games: '-', points: '-' }],
+  }),
 }
 
 export const localChangeRequestService: ChangeRequestService = {

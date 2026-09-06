@@ -164,6 +164,7 @@ class MatchService:
             "config": config_to_firestore(config),
             "state": state.to_dict(),
             "display_score": engine.display_score(),
+            "can_undo": bool(document.get("history", [])),
         }
 
     @staticmethod
