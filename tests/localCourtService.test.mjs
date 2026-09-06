@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { LocalCourtService, secondsLeft, validateOverride } from '../src/localCourtService.ts'
+import { createServer } from 'vite'
+
+const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
+const { LocalCourtService, secondsLeft, validateOverride } = await server.ssrLoadModule('/src/localCourtService.ts')
+test.after(async () => { await server.close() })
 
 function setup(settings = {}) {
   let time = 100000

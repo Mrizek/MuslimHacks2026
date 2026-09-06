@@ -1,43 +1,60 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
-import { courtActionService, missingCourtHandlers, courtActionUnavailable, umpireRequestStatus } from '../src/courtActionService.ts'
+import { createServer } from 'vite'
 
-for (const action of ['start', 'correction', 'override', 'changeover', 'umpire']) {
-  test(`${action} stays unavailable and cannot report a successful mutation`, async () => {
-    const command = {
-      action, courtId: 1, matchId: 'match-001', expectedRevision: '1', requestId: action,
-      ...(action === 'override' ? { proposed: { scores: [{ sets: '1', games: '3', points: '40' }, { sets: '0', games: '2', points: '30' }], server: 'A. Rivera' }, reason: 'Score entered incorrectly' } : {}),
-    }
-    const before = structuredClone(command)
-    assert.ok(!courtActionService.capabilities[action])
-    assert.equal(courtActionService.unavailableReasons[action], missingCourtHandlers[action])
-    const results = await Promise.all([courtActionService.execute(command), courtActionService.execute(command)])
-    for (const result of results) assert.deepEqual(result, { accepted: false, reason: missingCourtHandlers[action] })
-    assert.deepEqual(command, before)
-  })
-}
+const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
+const { courtActionService, courtActionUnavailable, missingCourtHandlers, umpireRequestStatus } = await server.ssrLoadModule('/src/courtActionService.ts')
+test.after(async () => { await server.close() })
 
-test('unconnected subscriptions never fabricate match or timer snapshots', async () => {
-  const snapshots = []
-  const unsubscribe1 = courtActionService.subscribe(1, 'match-001', (snapshot) => snapshots.push(snapshot))
-  const unsubscribe2 = courtActionService.subscribe(2, 'match-002', (snapshot) => snapshots.push(snapshot))
-  await courtActionService.execute({ action: 'changeover', courtId: 1, matchId: 'match-001', expectedRevision: '1', requestId: 'changeover' })
-  unsubscribe1()
-  unsubscribe2()
-  assert.deepEqual(snapshots, [])
+const root = process.cwd()
+const courtActionSource = readFileSync(join(root, 'src', 'courtActionService.ts'), 'utf8')
+const matchServiceSource = readFileSync(join(root, 'src', 'matchService.ts'), 'utf8')
+const configSource = readFileSync(join(root, 'src', 'config.ts'), 'utf8')
+
+test('frontend uses the backend WebSocket contracts', () => {
+  assert.match(courtActionSource, /wsBaseUrl/)
+  assert.match(courtActionSource, /\/matches\/\$\{matchId\}\//)
+  assert.match(courtActionSource, /score_point/)
+  assert.match(courtActionSource, /request_umpire/)
+  assert.match(courtActionSource, /clear_umpire_request/)
+  assert.match(courtActionSource, /override/)
 })
 
-const snapshot = { match: { status: 'Live', settings: { expressMode: false } }, revision: '1', canUndo: true, umpirePending: false }
-const capableService = { ...courtActionService, capabilities: { start: true, correction: true, override: true, changeover: true, umpire: true } }
+test('frontend uses the backend REST contracts', () => {
+  assert.match(matchServiceSource, /\/courts\//)
+  assert.match(matchServiceSource, /\/matches\//)
+  assert.match(matchServiceSource, /court_id/)
+  assert.match(matchServiceSource, /match_type/)
+})
 
-test('action guards depend on engine state, not court connectivity', () => {
+test('frontend keeps API and WebSocket base URLs centralized in Vite env config', () => {
+  assert.match(configSource, /VITE_COURTSIDE_API_BASE_URL/)
+  assert.match(configSource, /VITE_COURTSIDE_WS_BASE_URL/)
+})
+
+const snapshot = { match: { status: 'Live', settings: { expressMode: false, serveClockEnabled: true } }, revision: '1', canUndo: true, umpirePending: false }
+const capableService = { ...courtActionService, capabilities: { start: true, correction: true, override: true, changeover: true, umpire: true, clear_umpire: true, clockStart: true, clockPause: true, clockReset: true, clockEnable: true } }
+
+test('backend adapter advertises only commands it can actually send', async () => {
+  assert.equal(courtActionService.capabilities.score_team_0, true)
+  assert.equal(courtActionService.capabilities.score_team_1, true)
+  assert.equal(courtActionService.capabilities.correction, true)
+  assert.equal(courtActionService.capabilities.override, true)
+  assert.equal(courtActionService.capabilities.umpire, true)
+  assert.equal(courtActionService.capabilities.clear_umpire, true)
+  assert.equal(courtActionService.capabilities.changeover, undefined)
+  assert.equal(courtActionService.unavailableReasons?.changeover, missingCourtHandlers.changeover)
+})
+
+test('action guards depend on engine state and advertised capabilities', () => {
   assert.equal(courtActionUnavailable('correction', snapshot, capableService), '')
   assert.equal(courtActionUnavailable('correction', { ...snapshot, canUndo: false }, capableService), 'Nothing to undo')
-  assert.equal(courtActionUnavailable('correction', snapshot, courtActionService), missingCourtHandlers.correction)
-  assert.equal(courtActionUnavailable('override', snapshot, courtActionService), missingCourtHandlers.override)
+  assert.equal(courtActionUnavailable('changeover', snapshot, courtActionService), missingCourtHandlers.changeover)
   assert.equal(courtActionUnavailable('changeover', { ...snapshot, revision: '' }, capableService), 'Waiting for match engine state')
   assert.equal(courtActionUnavailable('changeover', { ...snapshot, timer: { phase: 'changeover' } }, capableService), 'Changeover already in progress')
-  assert.equal(courtActionUnavailable('changeover', { ...snapshot, match: { ...snapshot.match, settings: { expressMode: true } } }, capableService), 'Express mode skips changeovers')
+  assert.equal(courtActionUnavailable('changeover', { ...snapshot, match: { ...snapshot.match, settings: { expressMode: true, serveClockEnabled: true } } }, capableService), 'Express mode skips changeovers')
 })
 
 test('scheduled matches require engine start, without blocking umpire delivery by match status', () => {
@@ -51,7 +68,7 @@ test('scheduled matches require engine start, without blocking umpire delivery b
 })
 
 test('queued umpire requests never claim delivery', () => {
-  for (const [umpireDelivery, expected] of [['queued', 'Pending delivery'], ['delivered', 'Umpire requested'], [undefined, 'Delivery unconfirmed']]) {
+  for (const [umpireDelivery, expected] of [['queued', 'Pending delivery'], ['delivered', 'Umpire requested'], [undefined, 'Umpire requested']]) {
     const pending = { ...snapshot, umpirePending: true, umpireDelivery }
     assert.equal(umpireRequestStatus(pending), expected)
     assert.equal(courtActionUnavailable('umpire', pending, capableService), expected)

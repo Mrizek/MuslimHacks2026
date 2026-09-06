@@ -1,189 +1,284 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import './CourtDisplay.css'
-import { LocalCourtService, secondsLeft } from './localCourtService'
-import { ServeClock } from './ServeClock'
+import { courtsideConfig } from './config'
 import { CourtControls } from './CourtControls'
-import { courtActionService, type CourtActionService, type CourtSnapshot, type MatchTimerState } from './courtActionService'
-import { localChangeRequestService, localMatchService } from './matchService'
-import type { Court, Match, MatchFormat, MatchSettings, PendingChangeRequest, Sponsor, SponsorMediaType } from './types'
+import { courtActionService, sendMatchOverride, type CourtActionService, type CourtSnapshot, type MatchTimerState } from './courtActionService'
+import { backendMatchService, matchFromBackend } from './matchService'
+import type { BackendMatchSnapshot, Court, Match, MatchFormat, MatchSettings, Sponsor, SponsorMediaType } from './types'
+import { tournamentConfig } from './types'
 
-const courts: Court[] = [{ id: 1, name: 'Center court', connection: 'Local demo' }, { id: 2, name: 'Side court', connection: 'Local demo' }]
 const tabs = ['Courts', 'Matches', 'Rules', 'Sponsors']
-const defaultSettings: MatchSettings = { noAd: false, decidingTiebreak: true, expressMode: false, serveClockEnabled: true, serveClockSeconds: 25, changeoverSeconds: 90 }
-const initialMatches: Match[] = [{ id: 'match-001', courtId: 1, format: 'Doubles', teams: [['A. Rivera', 'M. Chen'], ['J. Patel', 'S. Williams']], server: 'A. Rivera', settings: defaultSettings, status: 'Live', scores: [{ sets: '1', games: '3', points: '40' }, { sets: '0', games: '2', points: '30' }], setHistory: [['6', '4'], ['4', '6']] }]
+const requiredCourtNames = ['Court 1', 'Court 2']
+const defaultSettings: MatchSettings = { noAd: false, tiebreakPoints: 7, gamesPerSet: 6, tiebreakAt: 6, setsToWin: 1, expressMode: false, serveClockEnabled: true, serveClockSeconds: 25, changeoverSeconds: 90 }
 const initialSponsors: Sponsor[] = []
-type FormState = { courtId: number; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings }
-const blankForm = (courtId: number, settings: MatchSettings = defaultSettings): FormState => ({ courtId, format: 'Doubles', teams: [['', ''], ['', '']], server: '', settings: { ...settings } })
+type FormState = { courtId: string | number; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings }
+const blankForm = (courtId: string | number, settings: MatchSettings = defaultSettings): FormState => ({ courtId, format: 'Doubles', teams: [['', ''], ['', '']], server: '', settings: { ...settings } })
 
+function StatusPill({ label, live = false, offline = false, showDot = true, sponsorStatus }: { label: string; live?: boolean; offline?: boolean; showDot?: boolean; sponsorStatus?: 'enabled' | 'disabled' }) {
+  return <span className={`status-pill ${live ? 'status-pill--live' : ''} ${offline ? 'status-pill--offline' : ''} ${showDot ? '' : 'status-pill--text-only'} ${sponsorStatus ? `status-pill--${sponsorStatus}` : ''}`}>{showDot && <span className="status-dot" />}{label}</span>
+}
 
-function StatusPill({ label, live = false, offline = false, showDot = true, sponsorStatus }: { label: string; live?: boolean; offline?: boolean; showDot?: boolean; sponsorStatus?: 'enabled' | 'disabled' }) { return <span className={`status-pill ${live ? 'status-pill--live' : ''} ${offline ? 'status-pill--offline' : ''} ${showDot ? '' : 'status-pill--text-only'} ${sponsorStatus ? `status-pill--${sponsorStatus}` : ''}`}>{showDot && <span className="status-dot" />}{label}</span> }
+function upsertMatch(matches: Match[], next: Match) {
+  return matches.some((match) => match.id === next.id) ? matches.map((match) => match.id === next.id ? next : match) : [...matches, next]
+}
 
-function ChangeoverDisplay({ match, sponsors, onClose, timer, onWarning }: { onWarning?: () => Promise<boolean>; match: Match; sponsors: Sponsor[]; onClose?: () => void; timer?: MatchTimerState }) {
-  const [endTimestamp, setEndTimestamp] = useState<number | null>(null)
-  const [remaining, setRemaining] = useState(timer ? secondsLeft(timer) : match.settings.changeoverSeconds || 90)
+function loadLocal<T>(key: string, fallback: T): T {
+  try { const saved = window.localStorage.getItem(key); return saved ? JSON.parse(saved) as T : fallback } catch { return fallback }
+}
+
+function validSeconds(value: number) { return Number.isInteger(value) && value > 0 }
+
+function loadSettings(): MatchSettings {
+  const saved = loadLocal<Partial<MatchSettings> & { decidingTiebreak?: boolean }>('tennis-default-settings', {})
+  return {
+    ...defaultSettings,
+    ...saved,
+    tiebreakPoints: saved.tiebreakPoints === 10 || saved.tiebreakPoints === 7 ? saved.tiebreakPoints : saved.decidingTiebreak ? 10 : defaultSettings.tiebreakPoints,
+    gamesPerSet: validSeconds(Number(saved.gamesPerSet)) ? Number(saved.gamesPerSet) : defaultSettings.gamesPerSet,
+    tiebreakAt: validSeconds(Number(saved.tiebreakAt)) ? Number(saved.tiebreakAt) : defaultSettings.tiebreakAt,
+    setsToWin: validSeconds(Number(saved.setsToWin)) ? Number(saved.setsToWin) : defaultSettings.setsToWin,
+    serveClockSeconds: validSeconds(Number(saved.serveClockSeconds)) ? Number(saved.serveClockSeconds) : defaultSettings.serveClockSeconds,
+    changeoverSeconds: validSeconds(Number(saved.changeoverSeconds)) ? Number(saved.changeoverSeconds) : defaultSettings.changeoverSeconds,
+  }
+}
+
+async function loadTwoCourts(): Promise<Court[]> {
+  const existing = await backendMatchService.listCourts()
+  if (existing.length >= requiredCourtNames.length) return existing.slice(0, requiredCourtNames.length)
+  const courts = [...existing]
+  for (const name of requiredCourtNames.slice(existing.length)) courts.push(await backendMatchService.createCourt(name))
+  return courts
+}
+
+function useDashboardSocket(enabled: boolean, onMatches: (matches: Match[]) => void, onMatch: (match: Match) => void, onStatus: (status: string) => void) {
+  useEffect(() => {
+    if (!enabled) return
+    let closed = false
+    let reconnectTimer = 0
+    let socket: WebSocket | null = null
+    const connect = () => {
+      onStatus('Connecting dashboard feed...')
+      socket = new WebSocket(`${courtsideConfig.wsBaseUrl}/dashboard/`)
+      socket.onopen = () => onStatus('Dashboard feed connected')
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data) as ({ type: 'match_snapshot'; scope?: string; matches?: BackendMatchSnapshot[] } | ({ type: 'match_updated' } & BackendMatchSnapshot))
+        if (message.type === 'match_snapshot' && Array.isArray(message.matches)) onMatches(message.matches.map(matchFromBackend))
+        if (message.type === 'match_updated') onMatch(matchFromBackend(message))
+      }
+      socket.onerror = () => onStatus('Dashboard feed error')
+      socket.onclose = () => {
+        if (closed) return
+        onStatus('Dashboard feed disconnected. Reconnecting...')
+        reconnectTimer = window.setTimeout(connect, 1500)
+      }
+    }
+    connect()
+    return () => {
+      closed = true
+      window.clearTimeout(reconnectTimer)
+      socket?.close()
+    }
+  }, [enabled, onMatch, onMatches, onStatus])
+}
+
+function ChangeoverDisplay({ match, sponsors, onClose, timer }: { match: Match; sponsors: Sponsor[]; onClose?: () => void; timer?: MatchTimerState }) {
+  const [remaining, setRemaining] = useState(timer?.remainingSeconds ?? match.settings.changeoverSeconds)
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [sponsorIndex, setSponsorIndex] = useState(0)
   const [mediaFailed, setMediaFailed] = useState(false)
-  const warned = useRef(timer?.warningIssued ?? false)
-  const warningCallback = useRef(onWarning)
-  warningCallback.current = onWarning
   const mediaRef = useRef<HTMLMediaElement>(null)
-  const failedSponsorIds = useRef<Set<string>>(new Set())
-  const expressMode = match.settings.expressMode
   const playableSponsors = (sponsors.length ? sponsors : loadLocal<Sponsor[]>('tennis-sponsors', [])).filter((sponsor) => sponsor.enabled)
   const sponsor = playableSponsors[sponsorIndex % Math.max(playableSponsors.length, 1)]
+  const advanceSponsor = () => { setMediaFailed(false); setSponsorIndex((index) => index + 1) }
+  const skipFailedSponsor = () => { setMediaFailed(true); if (playableSponsors.length > 1) advanceSponsor() }
 
   useEffect(() => {
-    if (expressMode) return
-    const end = timer ? timer.endsAt : endTimestamp ?? Date.now() + (match.settings.changeoverSeconds || 90) * 1000
-    if (!timer && !endTimestamp) setEndTimestamp(end)
+    if (match.settings.expressMode) return
+    const end = Date.now() + (timer?.remainingSeconds ?? match.settings.changeoverSeconds) * 1000
     const interval = window.setInterval(() => {
-      const next = Math.max(0, end === null ? timer?.remainingSeconds ?? 0 : Math.ceil((end - Date.now()) / 1000))
+      const next = Math.max(0, Math.ceil((end - Date.now()) / 1000))
       setRemaining(next)
-      if (next > 0 && next <= 10 && !warned.current) {
-        warned.current = true
-        void (async () => {
-          if (warningCallback.current && !await warningCallback.current()) { warned.current = false; return }
-        window.speechSynthesis?.cancel()
-        mediaRef.current?.pause()
-        if (audioEnabled) {
-          if (window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') window.speechSynthesis.speak(new SpeechSynthesisUtterance('Time'))
-          else try { const context = new AudioContext(); const oscillator = context.createOscillator(); oscillator.connect(context.destination); oscillator.frequency.value = 720; oscillator.start(); oscillator.stop(context.currentTime + 0.35) } catch { /* audio is optional */ }
-        }
-        })()
-      }
       if (next === 0) { mediaRef.current?.pause(); window.clearInterval(interval) }
     }, 250)
     return () => window.clearInterval(interval)
-  }, [audioEnabled, endTimestamp, expressMode, timer, match.settings.changeoverSeconds])
-
-  useEffect(() => {
-    setMediaFailed(false)
-    if (!sponsor || sponsor.mediaType !== 'Image') return
-    const timeout = window.setTimeout(() => setSponsorIndex((index) => index + 1), Math.min(sponsor.imageDurationSeconds * 1000, Math.max(1000, remaining * 1000)))
-    return () => window.clearTimeout(timeout)
-  }, [sponsor?.id])
-
-  useEffect(() => () => { mediaRef.current?.pause(); window.speechSynthesis?.cancel() }, [])
+  }, [match.settings.changeoverSeconds, match.settings.expressMode, timer?.remainingSeconds])
 
   const enableAudio = () => {
     try { const context = new AudioContext(); const oscillator = context.createOscillator(); oscillator.connect(context.destination); oscillator.frequency.value = 440; oscillator.start(); oscillator.stop(context.currentTime + 0.08); setAudioEnabled(true); void mediaRef.current?.play().catch(() => undefined) } catch { setAudioEnabled(false) }
   }
-  const advanceSponsor = () => { setMediaFailed(false); setSponsorIndex((index) => index + 1) }
-  const skipFailedSponsor = () => { if (sponsor) failedSponsorIds.current.add(sponsor.id); const nextIndex = sponsorIndex + 1; const allFailed = playableSponsors.length > 0 && playableSponsors.every((item) => failedSponsorIds.current.has(item.id)); setMediaFailed(allFailed); if (!allFailed) setSponsorIndex(nextIndex) }
   const minutes = Math.floor(remaining / 60).toString().padStart(2, '0')
   const seconds = (remaining % 60).toString().padStart(2, '0')
-  const warning = remaining <= 10 && remaining > 0
 
-  return <section className={`changeover ${warning ? 'changeover--warning' : ''}`} aria-label="Changeover display"><div className="changeover__top"><span>{timer ? "Match changeover" : "Changeover preview"}</span>{onClose && <button className="display-button" onClick={onClose}>Back to scoreboard</button>}</div>{expressMode ? <div className="changeover__skip"><strong>Express mode</strong><span>Rest skipped for this match.</span></div> : <><p className="changeover__label">{warning ? 'Rest ending' : 'Rest period'}</p><strong className="changeover__timer">{minutes}:{seconds}</strong><div className="sponsor-player">{sponsor && !mediaFailed ? <>{sponsor.mediaType === 'Image' && <img src={sponsor.mediaUrl} alt={sponsor.name} onError={skipFailedSponsor} />} {sponsor.mediaType === 'Video' && <video ref={(node) => { mediaRef.current = node }} src={sponsor.mediaUrl} autoPlay muted={!audioEnabled} onEnded={advanceSponsor} onError={skipFailedSponsor} />} {sponsor.mediaType === 'Audio' && <><audio ref={(node) => { mediaRef.current = node }} src={sponsor.mediaUrl} autoPlay onEnded={advanceSponsor} onError={skipFailedSponsor} /><span>{sponsor.name}</span></>}</> : <span>{playableSponsors.length ? 'Sponsor media could not load.' : 'No enabled sponsors for this break.'}</span>}</div>{warning && <p className="changeover__warning">TIME &middot; 10 SECONDS REMAIN</p>}<button type="button" className="audio-button" onClick={enableAudio}>{audioEnabled ? 'Audio enabled' : 'Enable audio / Play'}</button></>}</section>
+  return <section className="changeover" aria-label="Changeover display"><div className="changeover__top"><span>{timer ? 'Match changeover' : 'Changeover'}</span>{onClose && <button className="display-button" onClick={onClose}>Back to scoreboard</button>}</div>{match.settings.expressMode ? <div className="changeover__skip"><strong>Express mode</strong><span>Rest skipped for this match.</span></div> : <><p className="changeover__label">Rest period</p><strong className="changeover__timer">{minutes}:{seconds}</strong><div className="sponsor-player">{sponsor && !mediaFailed ? <>{sponsor.mediaType === 'Image' && <img src={sponsor.mediaUrl} alt={sponsor.name} onError={skipFailedSponsor} />} {sponsor.mediaType === 'Video' && <video ref={(node) => { mediaRef.current = node }} src={sponsor.mediaUrl} autoPlay muted={!audioEnabled} onEnded={advanceSponsor} onError={skipFailedSponsor} />} {sponsor.mediaType === 'Audio' && <><audio ref={(node) => { mediaRef.current = node }} src={sponsor.mediaUrl} autoPlay onEnded={advanceSponsor} onError={skipFailedSponsor} /><span>{sponsor.name}</span></>}</> : <span>{playableSponsors.length ? 'Sponsor media could not load.' : 'No enabled sponsors for this break.'}</span>}</div><button type="button" className="audio-button" onClick={enableAudio}>{audioEnabled ? 'Audio enabled' : 'Enable audio / Play'}</button></>}</section>
 }
 
-function CourtDisplay({ court, match, sponsors = [], startChangeover = false, onClose, service = courtActionService }: { court: Court; match: Match; sponsors?: Sponsor[]; startChangeover?: boolean; onClose: () => void; service?: CourtActionService }) {
+function serverMarker(match: Match, teamIndex: number, playerIndex: number) {
+  const state = match.backendState
+  return state ? state.server_team === teamIndex && state.server_player === playerIndex : match.teams[teamIndex][playerIndex] === match.server
+}
+
+function serverInitials(name: string) {
+  return name.split(/\s+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 3).toUpperCase() || 'S'
+}
+
+function teamTitle(match: Match) {
+  return match.teams.map((team) => team.join(' / ')).join(' vs ')
+}
+
+function leadingTeam(match: Match): 0 | 1 {
+  const fields = ['sets', 'games', 'points'] as const
+  for (const field of fields) {
+    const first = Number.parseInt(match.scores[0][field], 10)
+    const second = Number.parseInt(match.scores[1][field], 10)
+    if (Number.isFinite(first) && Number.isFinite(second) && first !== second) return first > second ? 0 : 1
+  }
+  return 0
+}
+
+function CourtDisplay({ court, match, sponsors = [], startChangeover = false, onClose, onMatchUpdate, service = courtActionService }: { court: Court; match: Match; sponsors?: Sponsor[]; startChangeover?: boolean; onClose: () => void; onMatchUpdate: (match: Match) => void; service?: CourtActionService }) {
   const [preview, setPreview] = useState(startChangeover)
-  const [snapshot, setSnapshot] = useState<CourtSnapshot>({ match, revision: '', umpirePending: false, canUndo: false })
-  const [now, setNow] = useState(() => Date.now())
+  const [snapshot, setSnapshot] = useState<CourtSnapshot>({ match, revision: '', umpirePending: Boolean(match.umpireRequested), canUndo: Boolean(match.backendState?.last_action), connected: false, initialSnapshotReady: false })
   const displayRef = useRef<HTMLElement>(null)
-  useEffect(() => { return service.subscribe(court.id, match.id, (next) => { if (next.match.id === match.id && next.match.courtId === court.id) setSnapshot(next) }) }, [court.id, match.id, service])
-  useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 250); return () => window.clearInterval(interval) }, [])
+  useEffect(() => {
+    return service.subscribe(court.id, match.id, (next) => { setSnapshot(next); onMatchUpdate(next.match) })
+  }, [court.id, match.id, service, onMatchUpdate])
   const current = snapshot.match
-  const timer = snapshot.timer
-  useEffect(() => { if (timer?.phase === 'changeover') setPreview(false) }, [timer?.phase])
-  const changeover = timer?.phase === 'changeover' && secondsLeft(timer, now) > 0
+  const ready = Boolean(snapshot.connected && snapshot.initialSnapshotReady)
   const openFullscreen = async () => { try { await displayRef.current?.requestFullscreen() } catch { /* fullscreen requires user permission */ } }
-  return <section ref={displayRef} className="court-display court-tablet" aria-label={'Court ' + court.id + ' tablet display'}>
-    <header className="display-bar"><div className="display-heading"><h2>{court.name}</h2><span>{current.format} &middot; {current.status === 'Live' ? 'In progress' : current.status}</span></div><div className="display-actions"><button className="display-button" onClick={openFullscreen}>Enter fullscreen</button><button className="display-button display-button--return" onClick={onClose}>Return</button></div></header>
-    <div className="court-play-area"><div className="display-match"><table className="display-score-table"><colgroup><col className="display-team-column" /><col /><col /><col /></colgroup><thead><tr><th scope="col">Teams</th><th scope="col">Sets</th><th scope="col">Games</th><th scope="col">Points</th></tr></thead><tbody>{current.teams.map((team, index) => <tr key={index}><th scope="row"><span className="court-team-label">Team {index + 1}</span>{team.map((player, playerIndex) => <span className="court-player" key={playerIndex}>{player}{current.status === 'Live' && player === current.server && <span className="court-server"><span aria-hidden="true">?</span> Serving</span>}</span>)}</th>{(['sets', 'games', 'points'] as const).map((field) => <td key={field}><span className={field === 'points' ? 'court-points' : ''}>{current.scores[index][field]}</span></td>)}</tr>)}</tbody></table></div>
-    <ServeClock snapshot={snapshot} service={service} now={now} /></div>
-    {(preview || changeover) && <ChangeoverDisplay key={changeover ? String(timer?.endsAt) : 'preview'} match={current} sponsors={sponsors} timer={changeover ? timer : undefined} onWarning={changeover ? async () => { const result = await service.execute({ action: 'changeoverWarning', courtId: court.id, matchId: current.id, expectedRevision: snapshot.revision, requestId: crypto.randomUUID() }); return result.accepted } : undefined} onClose={preview && !changeover ? () => setPreview(false) : undefined} />}
-    {!preview && !changeover && <button className="display-button court-preview" onClick={() => setPreview(true)}>Preview changeover</button>}
-    <CourtControls court={court} snapshot={snapshot} service={service} onAccepted={setSnapshot} />
+  return <section ref={displayRef} className="court-display court-tablet" aria-label={`${court.name} tablet display`}>
+    <header className="display-bar"><div className="display-heading"><h2>{court.name}</h2><span>{current.format} / {current.status}</span></div><StatusPill label={ready ? 'Connected' : 'Connecting'} offline={!ready} showDot={false} /><div className="display-actions"><button className="display-button" onClick={openFullscreen}>Enter fullscreen</button><button className="display-button display-button--return" onClick={onClose}>Return</button></div></header>
+    {snapshot.error && <p className="court-error" role="alert">{snapshot.error}</p>}
+    {!snapshot.initialSnapshotReady && <p className="court-feedback" role="status">Waiting for backend match snapshot...</p>}
+    <div className="court-play-area"><div className="display-match"><table className="display-score-table"><colgroup><col className="display-team-column" /><col /><col /><col /></colgroup><thead><tr><th scope="col">Teams</th><th scope="col">Sets</th><th scope="col">Games</th><th scope="col">Points</th></tr></thead><tbody>{current.teams.map((team, index) => <tr key={index}><th scope="row"><span className="court-team-label">Team {index + 1}</span>{team.map((player, playerIndex) => <span className="court-player" key={playerIndex}>{player}{serverMarker(current, index, playerIndex) && <span className="court-server"><span aria-hidden="true">S</span> Serving</span>}</span>)}</th>{(['sets', 'games', 'points'] as const).map((field) => <td key={field}><span className={field === 'points' ? 'court-points' : ''}>{current.scores[index][field]}</span></td>)}</tr>)}</tbody></table></div>
+    <aside className="serve-clock" aria-label="Match state"><span>{current.backendState?.in_tiebreak ? 'Tiebreak' : 'Server'}</span><strong>{serverInitials(current.server)}</strong><small>{current.umpireRequested ? 'Umpire requested' : current.status}</small></aside></div>
+    {(preview || snapshot.timer?.phase === 'changeover') && <ChangeoverDisplay match={current} sponsors={sponsors} timer={snapshot.timer} onClose={preview ? () => setPreview(false) : undefined} />}
+    <CourtControls court={court} snapshot={snapshot} service={service} onChangeover={() => setPreview((visible) => !visible)} onAccepted={(next) => { setSnapshot(next); onMatchUpdate(next.match) }} />
   </section>
 }
 
-function UmpireRequest({ match, service }: { match: Match; service: LocalCourtService }) {
-  const [error, setError] = useState('')
-  const snapshot = service.snapshot(match)
-  if (!snapshot.umpirePending) return null
-  return <div className="umpire-request" role="status"><strong>Umpire requested</strong><small>Recorded in this browser</small><button className="button button--secondary" onClick={async () => { const result = await service.execute({ action: 'umpireResolve', courtId: match.courtId, matchId: match.id, expectedRevision: snapshot.revision, requestId: crypto.randomUUID() }); setError(result.accepted ? '' : result.reason) }}>Resolve request</button>{error && <span role="alert">{error}</span>}</div>
+function Scoreboard({ match }: { match: Match }) {
+  return <table className="score-table"><colgroup><col className="score-table__team-column" /><col className="score-table__value-column" /><col className="score-table__value-column" /><col className="score-table__points-column" /></colgroup><thead><tr><th scope="col">Team</th><th scope="col">Sets</th><th scope="col">Games</th><th scope="col">Points</th></tr></thead><tbody>{match.teams.map((team, index) => <tr key={`${match.id}-${index}`}><th scope="row">{team.join(' / ')}</th><td><span className="score-value">{match.scores[index].sets}</span></td><td><span className="score-value">{match.scores[index].games}</span></td><td><span className="score-value points-box">{match.scores[index].points}</span></td></tr>)}</tbody></table>
 }
 
-function Scoreboard({ match }: { match: Match }) { return <table className="score-table"><colgroup><col className="score-table__team-column" /><col className="score-table__value-column" /><col className="score-table__value-column" /><col className="score-table__points-column" /></colgroup><thead><tr><th scope="col">Team</th><th scope="col">Sets</th><th scope="col">Games</th><th scope="col">Points</th></tr></thead><tbody>{match.teams.map((team, index) => <tr key={team.join('-')}><th scope="row">{team.join(' / ')}</th><td><span className="score-value">{match.scores[index].sets}</span></td><td><span className="score-value">{match.scores[index].games}</span></td><td><span className="score-value points-box">{match.scores[index].points}</span></td></tr>)}</tbody></table> }
-
-function CourtCard({ court, match, onAssign, onDisplay, service }: { service: LocalCourtService; court: Court; match?: Match; onAssign: () => void; onDisplay: () => void }) {
-  if (!match) return <article className="court-card court-card--available"><div className="court-card__topline"><div><p className="eyebrow">Court {court.id} / {court.name}</p><h2>Ready for a match</h2></div><StatusPill label="Available" showDot={false} /></div><div className="available-state"><div className="court-mark" aria-hidden="true"><span /></div><p>No match assigned. This court is open for play.</p><button type="button" className="button button--primary" onClick={onAssign}>Assign match <span aria-hidden="true">+</span></button><div className="connection-note"></div></div></article>
-  return <article className={`court-card ${match.status === 'Live' ? 'court-card--live' : 'court-card--scheduled'}`}><div className="court-card__topline"><div><p className="eyebrow">Court {court.id} / {court.name}</p><h2>{match.teams.map((team) => team.join(' / ')).join(' vs ')}</h2></div><StatusPill label={match.status === 'Live' ? 'Live' : match.status === 'Complete' ? 'Complete' : 'Awaiting start'} live={match.status === 'Live'} /></div><div className="match-meta"><span>{match.format} match</span></div><Scoreboard match={match} /><UmpireRequest match={match} service={service} /><div className="live-details"><div><span>Current server</span><strong>{match.server}</strong></div><div><span>No-Ad</span><strong>{match.settings.noAd ? 'On' : 'Off'}</strong></div><div><span>Match ID</span><strong>{match.id}</strong></div></div><div className="court-card__actions"><button type="button" className="button button--display" onClick={onDisplay}>Court display</button></div></article>
+function CourtCard({ court, match, index, onAssign, onDisplay, onEndMatch }: { court: Court; match?: Match; index: number; onAssign: () => void; onDisplay: () => void; onEndMatch: (match: Match) => void }) {
+  const courtLabel = `Court ${index + 1}`
+  if (!match) return <article className="court-card court-card--available"><div className="court-card__topline"><div><p className="eyebrow">{courtLabel} / {court.name}</p><h2>Ready for a match</h2></div><StatusPill label="Available" showDot={false} /></div><div className="available-state"><div className="court-mark" aria-hidden="true"><span /></div><p>No active match on this court. Previous completed matches stay in the database.</p><button type="button" className="button button--primary" onClick={onAssign}>Start new match <span aria-hidden="true">+</span></button><div className="connection-note"><StatusPill label={court.connection} offline={court.connection === 'Offline'} showDot={false} /></div></div></article>
+  return <article className={`court-card ${match.status === 'Live' ? 'court-card--live' : 'court-card--scheduled'} ${match.umpireRequested ? 'court-card--umpire' : ''}`}><div className="court-card__topline"><div><p className="eyebrow">{courtLabel} / {court.name}</p><h2>{teamTitle(match)}</h2></div><StatusPill label={match.status} live={match.status === 'Live'} /></div>{match.umpireRequested && <div className="umpire-alert" role="alert">Umpire requested</div>}<div className="match-meta"><span>{match.format} match</span><span className="match-meta__actions"><StatusPill label={court.connection} offline={court.connection === 'Offline'} showDot={false} /><button type="button" className="button button--danger" onClick={() => onEndMatch(match)}>End match</button></span></div><Scoreboard match={match} /><div className="live-details"><div><span>Current server</span><strong>{match.server}</strong></div><div><span>Umpire</span><strong className={match.umpireRequested ? 'danger-text' : ''}>{match.umpireRequested ? 'Requested' : 'Clear'}</strong></div><div><span>Court</span><strong>{court.name}</strong></div></div><div className="court-card__actions"><button type="button" className="button button--display" onClick={onDisplay}>Court display</button></div></article>
 }
 
-function MatchForm({ courts, availableCourtIds, form, setForm, submitting, error, onSubmit, onCancel }: { courts: Court[]; availableCourtIds: number[]; form: FormState; setForm: (form: FormState) => void; submitting: boolean; error: string; onSubmit: () => void; onCancel: () => void }) {
+function MatchForm({ courts, availableCourtIds, form, setForm, submitting, error, onSubmit, onCancel }: { courts: Court[]; availableCourtIds: (string | number)[]; form: FormState; setForm: (form: FormState) => void; submitting: boolean; error: string; onSubmit: () => void; onCancel: () => void }) {
   const teamSize = form.format === 'Singles' ? 1 : 2
   const availableCourts = courts.filter((court) => availableCourtIds.includes(court.id) || court.id === form.courtId)
-  const setFormat = (format: MatchFormat) => setForm({ ...form, format, teams: [Array(teamSize).fill('').map((_, i) => form.teams[0][i] ?? ''), Array(teamSize).fill('').map((_, i) => form.teams[1][i] ?? '')] as [string[], string[]], server: '' })
+  const setFormat = (format: MatchFormat) => {
+    const nextSize = format === 'Singles' ? 1 : 2
+    setForm({ ...form, format, teams: [Array(nextSize).fill('').map((_, i) => form.teams[0][i] ?? ''), Array(nextSize).fill('').map((_, i) => form.teams[1][i] ?? '')] as [string[], string[]], server: '' })
+  }
   const updatePlayer = (team: 0 | 1, index: number, value: string) => { const teams = form.teams.map((players, teamIndex) => teamIndex === team ? players.map((player, playerIndex) => playerIndex === index ? value : player) : players) as [string[], string[]]; setForm({ ...form, teams, server: form.server || value }) }
-  return <section className="form-panel" aria-labelledby="assign-heading"><div className="form-heading"><div><p className="kicker">New scheduled match</p><h2 id="assign-heading">Assign a match</h2></div><button type="button" className="icon-button" onClick={onCancel} aria-label="Close form">×</button></div><div className="form-grid"><label>Court<select value={form.courtId} onChange={(event) => setForm({ ...form, courtId: Number(event.target.value) })}>{availableCourts.map((court) => <option key={court.id} value={court.id}>Court {court.id}</option>)}</select></label><label>Match format<select value={form.format} onChange={(event) => setFormat(event.target.value as MatchFormat)}><option>Singles</option><option>Doubles</option><option>Mixed doubles</option></select></label></div><div className="player-grid"><div><p className="form-label">Team 1</p>{form.teams[0].map((player, index) => <input key={`team-1-${index}`} value={player} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(0, index, event.target.value)} />)}</div><div><p className="form-label">Team 2</p>{form.teams[1].map((player, index) => <input key={`team-2-${index}`} value={player} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(1, index, event.target.value)} />)}</div></div><label>Initial server<select value={form.server} onChange={(event) => setForm({ ...form, server: event.target.value })}><option value="">Select a player</option>{form.teams.flat().filter(Boolean).map((player) => <option key={player} value={player}>{player}</option>)}</select></label><div className="toggle-grid">{[['noAd', 'No-Ad scoring'], ['decidingTiebreak', 'Deciding 10-point match tiebreak'], ['expressMode', 'Express mode']].map(([key, label]) => <label className="toggle" key={key}><input type="checkbox" checked={form.settings[key as keyof MatchSettings] === true} onChange={(event) => setForm({ ...form, settings: { ...form.settings, [key]: event.target.checked } })} /><span>{label}</span></label>)}</div>{error && <p className="form-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="button button--secondary" onClick={onCancel}>Cancel</button><button type="button" className="button button--primary" disabled={submitting} onClick={onSubmit}>{submitting ? 'Assigning...' : 'Assign match'}</button></div></section>
+  const updateSettings = (patch: Partial<MatchSettings>) => setForm({ ...form, settings: { ...form.settings, ...patch } })
+  return <section className="form-panel" aria-labelledby="assign-heading"><div className="form-heading"><div><p className="kicker">New live match</p><h2 id="assign-heading">Assign a match</h2></div><button type="button" className="icon-button" onClick={onCancel} aria-label="Close form">x</button></div><div className="form-grid"><label>Court<select value={form.courtId} onChange={(event) => setForm({ ...form, courtId: event.target.value })}>{availableCourts.map((court, index) => <option key={court.id} value={court.id}>{court.name || `Court ${index + 1}`}</option>)}</select></label><label>Match format<select value={form.format} onChange={(event) => setFormat(event.target.value as MatchFormat)}><option>Singles</option><option>Doubles</option><option>Mixed doubles</option></select></label></div><div className="player-grid"><div><p className="form-label">Team 1</p>{form.teams[0].slice(0, teamSize).map((player, index) => <input key={`team-1-${index}`} value={player} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(0, index, event.target.value)} />)}</div><div><p className="form-label">Team 2</p>{form.teams[1].slice(0, teamSize).map((player, index) => <input key={`team-2-${index}`} value={player} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(1, index, event.target.value)} />)}</div></div><label>Initial server<select value={form.server} onChange={(event) => setForm({ ...form, server: event.target.value })}><option value="">Select a player</option>{form.teams.flat().filter(Boolean).map((player) => <option key={player} value={player}>{player}</option>)}</select></label><div className="toggle-grid"><label className="toggle"><input type="checkbox" checked={form.settings.noAd} onChange={(event) => updateSettings({ noAd: event.target.checked })} /><span>No-Ad scoring</span></label><label className="toggle"><input type="checkbox" checked={form.settings.expressMode} onChange={(event) => updateSettings({ expressMode: event.target.checked })} /><span>Express mode</span></label><label className="toggle"><input type="checkbox" checked={form.settings.serveClockEnabled} onChange={(event) => updateSettings({ serveClockEnabled: event.target.checked })} /><span>Serve clock</span></label></div><div className="form-grid"><label>Games per set<input type="number" min="1" step="1" value={form.settings.gamesPerSet} onChange={(event) => updateSettings({ gamesPerSet: Number(event.target.value) })} /></label><label>Tiebreak at<input type="number" min="1" step="1" value={form.settings.tiebreakAt} onChange={(event) => updateSettings({ tiebreakAt: Number(event.target.value) })} /></label><label>Tiebreak points<select value={form.settings.tiebreakPoints} onChange={(event) => updateSettings({ tiebreakPoints: Number(event.target.value) as 7 | 10 })}><option value={7}>7</option><option value={10}>10</option></select></label><label>Sets to win<input type="number" min="1" step="1" value={form.settings.setsToWin} onChange={(event) => updateSettings({ setsToWin: Number(event.target.value) })} /></label></div>{error && <p className="form-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="button button--secondary" onClick={onCancel}>Cancel</button><button type="button" className="button button--primary" disabled={submitting} onClick={onSubmit}>{submitting ? 'Assigning...' : 'Assign match'}</button></div></section>
 }
 
-function MatchesView({ matches }: { matches: Match[] }) { return <section className="dashboard-content matches-view"><div className="section-heading"><div><p className="kicker">Match list</p><h2>Scheduled matches</h2></div><span className="refresh-label">{matches.length} matches in local feed</span></div><div className="match-list">{matches.map((match) => <article className="match-row" key={match.id}><div><span className="eyebrow">{match.id} / Court {match.courtId}</span><strong>{match.teams.map((team) => team.join(' / ')).join(' vs ')}</strong></div><span>{match.format}</span><StatusPill label={match.status === 'Live' ? 'Live' : 'Awaiting start'} live={match.status === 'Live'} /></article>)}</div><p className="data-note"><span>i</span> Matches are saved in this browser.</p></section> }
+function MatchesView({ matches, courts, onPreview }: { matches: Match[]; courts: Court[]; onPreview: (matchId: string) => void }) {
+  return <section className="dashboard-content matches-view"><div className="section-heading"><div><p className="kicker">Match list</p><h2>Match history</h2></div><span className="refresh-label">{matches.length} matches from backend</span></div><div className="match-list">{matches.map((match) => { const court = courts.find((item) => item.id === match.courtId); return <article className="match-row" key={match.id}><div><span className="eyebrow">{court?.name || match.courtId}</span><strong>{teamTitle(match)}</strong><small>Court: {court?.name || match.courtId}</small></div><span>{match.format}</span><StatusPill label={match.status} live={match.status === 'Live'} /><button type="button" className="button button--secondary" onClick={() => onPreview(match.id)}>Preview</button></article> })}</div>{matches.length === 0 && <p className="data-note"><span>i</span>No matches have been created yet.</p>}</section>
+}
 
-function loadLocal<T>(key: string, fallback: T): T { try { const saved = window.localStorage.getItem(key); return saved ? JSON.parse(saved) as T : fallback } catch { return fallback } }
-function loadSettings(): MatchSettings { const saved = loadLocal<Partial<MatchSettings>>('tennis-default-settings', {}); return { ...defaultSettings, ...saved, serveClockSeconds: validSeconds(Number(saved.serveClockSeconds)) ? Number(saved.serveClockSeconds) : defaultSettings.serveClockSeconds, changeoverSeconds: validSeconds(Number(saved.changeoverSeconds)) ? Number(saved.changeoverSeconds) : defaultSettings.changeoverSeconds } }
-function loadPendingRequests(): PendingChangeRequest[] { const saved = loadLocal<unknown>('tennis-pending-requests', []); return Array.isArray(saved) ? saved.filter((item): item is PendingChangeRequest => Boolean(item && typeof item === 'object' && 'id' in item && 'matchIds' in item && 'requestedSettings' in item)) : [] }
-function validSeconds(value: number) { return Number.isInteger(value) && value > 0 }
-function RulesView({ defaults, setDefaults, matches, pending, onRequest }: { defaults: MatchSettings; setDefaults: (settings: MatchSettings) => void; matches: Match[]; pending: PendingChangeRequest[]; onRequest: (settings: MatchSettings, matchIds: string[]) => void }) {
-  const [draft, setDraft] = useState(defaults); const [saved, setSaved] = useState(false); const [selected, setSelected] = useState<string[]>([]); const [requestOpen, setRequestOpen] = useState(false); const [requestDraft, setRequestDraft] = useState(defaults); const [error, setError] = useState('')
+function RulesView({ defaults, setDefaults }: { defaults: MatchSettings; setDefaults: (settings: MatchSettings) => void }) {
+  const [draft, setDraft] = useState(defaults)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
   const update = (patch: Partial<MatchSettings>) => { setDraft({ ...draft, ...patch }); setSaved(false) }
-  const save = () => { if ((draft.serveClockEnabled && !validSeconds(draft.serveClockSeconds)) || (!draft.expressMode && !validSeconds(draft.changeoverSeconds))) { setError('Enabled timer values must be positive whole numbers.'); return } setError(''); setDefaults(draft); setSaved(true) }
-  const toggleMatch = (id: string) => setSelected((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
-  const submitRequest = () => { if (!selected.length) { setError('Select at least one active match.'); return } if ((requestDraft.serveClockEnabled && !validSeconds(requestDraft.serveClockSeconds)) || (!requestDraft.expressMode && !validSeconds(requestDraft.changeoverSeconds))) { setError('Enabled timer values must be positive whole numbers.'); return } setError(''); onRequest(requestDraft, selected); setRequestOpen(false); setSelected([]) }
-  const fields = (value: MatchSettings, change: (patch: Partial<MatchSettings>) => void) => <><label className="rule-toggle"><input type="checkbox" checked={value.noAd} onChange={(event) => change({ noAd: event.target.checked })} /><span>No-Ad scoring</span></label><label className="rule-toggle"><input type="checkbox" checked={value.decidingTiebreak} onChange={(event) => change({ decidingTiebreak: event.target.checked })} /><span>Deciding 10-point match tiebreak</span></label><label className="rule-toggle"><input type="checkbox" checked={value.serveClockEnabled} onChange={(event) => change({ serveClockEnabled: event.target.checked })} /><span>Serve clock</span></label>{value.serveClockEnabled && <label className="rule-number">Serve clock duration (seconds)<input type="number" min="1" step="1" value={value.serveClockSeconds} onChange={(event) => change({ serveClockSeconds: Number(event.target.value) })} /></label>}<label className="rule-toggle"><input type="checkbox" checked={value.expressMode} onChange={(event) => change({ expressMode: event.target.checked })} /><span>Express mode (disables changeover rests)</span></label><label className="rule-number">Changeover duration (seconds)<input type="number" min="1" step="1" disabled={value.expressMode} value={value.changeoverSeconds} onChange={(event) => change({ changeoverSeconds: Number(event.target.value) })} /></label></>
-  return <section className="dashboard-content rules-view"><div className="rules-heading"><p className="kicker">Tournament defaults</p><h2>Rules & match timing</h2><p>Defaults apply to new matches. Existing matches keep their applied rules.</p></div><div className="rules-panel">{fields(draft, update)}{error && <p className="form-error" role="alert">{error}</p>}<button type="button" className="button button--primary" onClick={save}>Save defaults for new matches</button>{saved && <p className="save-confirmation" role="status">Defaults saved for new matches.</p>}</div><div className="request-panel"><div><p className="kicker">Local change requests</p><h2>Request changes for active matches</h2><p>Select matches and save a local change request.</p></div>{matches.map((match) => <label className="match-select" key={match.id}><input type="checkbox" checked={selected.includes(match.id)} onChange={() => toggleMatch(match.id)} /><span><strong>{match.id} / Court {match.courtId}</strong>{match.teams.map((team) => team.join(' / ')).join(' vs ')}</span></label>)}<button type="button" className="button button--secondary" onClick={() => { setRequestDraft(defaults); setRequestOpen(true) }}>Review requested changes</button>{requestOpen && <div className="request-review"><h3>Requested changes</h3><p>{selected.length} active match{selected.length === 1 ? '' : 'es'} selected. Current rules and scores will remain unchanged.</p><ul><li>No-Ad: {requestDraft.noAd ? 'On' : 'Off'}</li><li>Serve clock: {requestDraft.serveClockEnabled ? `${requestDraft.serveClockSeconds}s` : 'Off'}</li><li>Changeover: {requestDraft.expressMode ? 'Express mode' : `${requestDraft.changeoverSeconds}s`}</li></ul><div className="form-actions"><button type="button" className="button button--secondary" onClick={() => setRequestOpen(false)}>Cancel</button><button type="button" className="button button--primary" onClick={submitRequest}>Save request locally</button></div></div>}{pending.map((request) => <p className="pending-request" key={request.id}>Saved locally; not delivered. {request.matchIds.length} match{request.matchIds.length === 1 ? '' : 'es'} affected.</p>)}</div></section>
+  const save = () => {
+    if ([draft.gamesPerSet, draft.tiebreakAt, draft.setsToWin, draft.serveClockSeconds, draft.changeoverSeconds].some((value) => !validSeconds(Number(value)))) { setError('Rule and timer values must be positive whole numbers.'); return }
+    if (draft.tiebreakAt < draft.gamesPerSet) { setError('Tiebreak at cannot be lower than games per set.'); return }
+    setError(''); setDefaults(draft); setSaved(true)
+  }
+  return <section className="dashboard-content rules-view"><div className="rules-heading"><p className="kicker">Tournament defaults</p><h2>Rules & match timing</h2><p>Defaults apply when creating a new match.</p></div><div className="rules-panel"><label className="rule-toggle"><input type="checkbox" checked={draft.noAd} onChange={(event) => update({ noAd: event.target.checked })} /><span>No-Ad scoring</span></label><label className="rule-toggle"><input type="checkbox" checked={draft.serveClockEnabled} onChange={(event) => update({ serveClockEnabled: event.target.checked })} /><span>Serve clock</span></label>{draft.serveClockEnabled && <label className="rule-number">Serve clock duration (seconds)<input type="number" min="1" step="1" value={draft.serveClockSeconds} onChange={(event) => update({ serveClockSeconds: Number(event.target.value) })} /></label>}<label className="rule-toggle"><input type="checkbox" checked={draft.expressMode} onChange={(event) => update({ expressMode: event.target.checked })} /><span>Express mode</span></label><label className="rule-number">Games per set<input type="number" min="1" step="1" value={draft.gamesPerSet} onChange={(event) => update({ gamesPerSet: Number(event.target.value) })} /></label><label className="rule-number">Tiebreak at<input type="number" min="1" step="1" value={draft.tiebreakAt} onChange={(event) => update({ tiebreakAt: Number(event.target.value) })} /></label><label className="rule-number">Tiebreak points<select value={draft.tiebreakPoints} onChange={(event) => update({ tiebreakPoints: Number(event.target.value) as 7 | 10 })}><option value={7}>7</option><option value={10}>10</option></select></label><label className="rule-number">Sets to win<input type="number" min="1" step="1" value={draft.setsToWin} onChange={(event) => update({ setsToWin: Number(event.target.value) })} /></label><label className="rule-number">Changeover duration (seconds)<input type="number" min="1" step="1" disabled={draft.expressMode} value={draft.changeoverSeconds} onChange={(event) => update({ changeoverSeconds: Number(event.target.value) })} /></label>{error && <p className="form-error" role="alert">{error}</p>}<button type="button" className="button button--primary" onClick={save}>Save defaults for new matches</button>{saved && <p className="save-confirmation" role="status">Defaults saved for new matches.</p>}</div></section>
 }
 
 type SponsorDraft = Omit<Sponsor, 'id'>
 const emptySponsor: SponsorDraft = { name: '', mediaType: 'Image', mediaUrl: '', imageDurationSeconds: 10, enabled: true }
 function SponsorsView({ sponsors, setSponsors, onPreview }: { sponsors: Sponsor[]; setSponsors: (sponsors: Sponsor[]) => void; onPreview: () => void }) {
-  const [draft, setDraft] = useState<SponsorDraft>(emptySponsor); const [editingId, setEditingId] = useState<string | null>(null); const [error, setError] = useState(''); const [notice, setNotice] = useState('')
-  const edit = (sponsor: Sponsor) => { const { id: _id, ...values } = sponsor; setDraft(values); setEditingId(sponsor.id); setError(''); setNotice('') }
-  const cancel = () => { setDraft(emptySponsor); setEditingId(null); setError('') }
-  const save = () => { if (!draft.name.trim()) { setError('Enter a sponsor name.'); return } if (!/^https?:\/\/[^\s]+$/i.test(draft.mediaUrl)) { setError('Use a valid HTTP or HTTPS hosted media URL.'); return } if (!Number.isInteger(draft.imageDurationSeconds) || draft.imageDurationSeconds <= 0) { setError('Image display duration must be a positive whole number.'); return } const sponsor = { ...draft, name: draft.name.trim(), mediaUrl: draft.mediaUrl.trim() }; setSponsors(editingId ? sponsors.map((item) => item.id === editingId ? { ...item, ...sponsor } : item) : [...sponsors, { ...sponsor, id: `sponsor-${Date.now()}` }]); setNotice(editingId ? 'Sponsor updated.' : 'Sponsor added to the playlist.'); cancel() }
-  const remove = (id: string) => { const sponsor = sponsors.find((item) => item.id === id); if (sponsor && window.confirm(`Delete ${sponsor.name}?`)) { setSponsors(sponsors.filter((item) => item.id !== id)); setNotice('Sponsor deleted.') } }
-  const move = (index: number, direction: -1 | 1) => { const target = index + direction; if (target < 0 || target >= sponsors.length) return; const next = [...sponsors]; [next[index], next[target]] = [next[target], next[index]]; setSponsors(next) }
-  const toggleEnabled = (id: string) => setSponsors(sponsors.map((sponsor) => sponsor.id === id ? { ...sponsor, enabled: !sponsor.enabled } : sponsor))
-  return <section className="dashboard-content sponsors-view"><div className="sponsors-heading"><p className="kicker">Changeover playlist</p><h2>Sponsors</h2><p>Enabled sponsors play in order during changeover previews. Hosted URLs are supported; file uploads can be connected later.</p><button type="button" className="button button--primary" onClick={onPreview}>Preview changeover</button></div><div className="sponsor-manager"><div className="sponsor-form"><h3>{editingId ? 'Edit sponsor' : 'Add sponsor'}</h3><label>Sponsor name<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>Media type<select value={draft.mediaType} onChange={(event) => setDraft({ ...draft, mediaType: event.target.value as SponsorMediaType })}><option>Image</option><option>Video</option><option>Audio</option></select></label><label>Hosted media URL<input type="url" value={draft.mediaUrl} placeholder="https://example.com/media" onChange={(event) => setDraft({ ...draft, mediaUrl: event.target.value })} /></label><label>Image display duration (seconds)<input type="number" min="1" step="1" value={draft.imageDurationSeconds} onChange={(event) => setDraft({ ...draft, imageDurationSeconds: Number(event.target.value) })} /></label><label className="sponsor-enabled"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /> Enabled in playlist</label>{error && <p className="form-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="button button--secondary" onClick={cancel}>Cancel</button><button type="button" className="button button--primary" onClick={save}>Save sponsor</button></div></div><div className="sponsor-list"><div className="sponsor-list-heading"><h3>Saved sponsors</h3><button type="button" className="button button--primary" onClick={() => { cancel(); document.querySelector('.sponsor-form input')?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}>Add sponsor</button></div>{notice && <p className="save-confirmation" role="status">{notice}</p>}{sponsors.length === 0 && <p className="empty-sponsors">No sponsors saved yet.</p>}{sponsors.map((sponsor, index) => <article className="sponsor-item" key={sponsor.id}><div className="sponsor-preview">{sponsor.mediaType === 'Image' ? <img src={sponsor.mediaUrl} alt="" onError={(event) => { event.currentTarget.hidden = true }} /> : sponsor.mediaType === 'Video' ? <video src={sponsor.mediaUrl} muted controls /> : <span className="audio-preview">Audio</span>}</div><div className="sponsor-info"><h4>{sponsor.name}</h4><p>{sponsor.mediaType} / {sponsor.mediaType === 'Image' ? `${sponsor.imageDurationSeconds}s` : 'Advances on finish'}</p><StatusPill label={sponsor.enabled ? 'Enabled' : 'Disabled'} showDot={false} sponsorStatus={sponsor.enabled ? 'enabled' : 'disabled'} /></div><div className="sponsor-actions"><button type="button" className={`button sponsor-toggle ${sponsor.enabled ? 'sponsor-toggle--disable' : 'sponsor-toggle--enable'}`} onClick={() => toggleEnabled(sponsor.id)}>{sponsor.enabled ? 'Disable' : 'Enable'}</button><button type="button" className="button button--secondary" disabled={index === 0} onClick={() => move(index, -1)}>Move up</button><button type="button" className="button button--secondary" disabled={index === sponsors.length - 1} onClick={() => move(index, 1)}>Move down</button><button type="button" className="button button--secondary" onClick={() => edit(sponsor)}>Edit</button><button type="button" className="button button--secondary" onClick={() => remove(sponsor.id)}>Delete</button></div></article>)}</div></div></section>
-}
-
-function LocalDemo({ activeTab, setActiveTab }: { activeTab: string; setActiveTab: (tab: string) => void }) {
-  const [service] = useState(() => new LocalCourtService(window.localStorage, initialMatches)); const [matches, setMatches] = useState(() => service.getMatches()); const [form, setForm] = useState<FormState | null>(null); const [submitting, setSubmitting] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [lastUpdated, setLastUpdated] = useState(() => new Date()); const [displayCourtId, setDisplayCourtId] = useState<number | null>(null); const [defaults, setDefaults] = useState<MatchSettings>(() => loadSettings()); const [pending, setPending] = useState<PendingChangeRequest[]>(() => loadPendingRequests()); const [sponsors, setSponsors] = useState<Sponsor[]>(() => loadLocal('tennis-sponsors', initialSponsors))
-  useEffect(() => {
-    const unsubscribe = service.subscribeAll(setMatches)
-    const tick = () => { try { service.tick() } catch { setError('Could not save clock state. Check browser storage.') } }
-    tick(); const interval = window.setInterval(tick, 250)
-    const storage = (event: StorageEvent) => { if (event.key === 'tennis-matches') service.notify() }
-    window.addEventListener('storage', storage)
-    return () => { unsubscribe(); window.clearInterval(interval); window.removeEventListener('storage', storage) }
-  }, [service])
-  useEffect(() => { try { window.localStorage.setItem('tennis-default-settings', JSON.stringify(defaults)); window.localStorage.setItem('tennis-pending-requests', JSON.stringify(pending)); window.localStorage.setItem('tennis-sponsors', JSON.stringify(sponsors)) } catch { /* local persistence is optional */ } }, [defaults, pending, sponsors])
-  const occupiedCount = courts.filter((court) => matches.some((match) => match.courtId === court.id)).length; const availableCount = courts.length - occupiedCount
-  const handleAssign = async () => { if (!form || submitting) return; const players = form.teams.flat().map((player) => player.trim()); if (players.some((player) => !player)) { setError('Enter every player name before assigning the match.'); return } if (!form.server) { setError('Select the initial server.'); return } if (matches.some((match) => match.courtId === form.courtId)) { setError('That court is already assigned. Choose an available court.'); return } setError(''); setSubmitting(true); const match = await localMatchService.createScheduledMatch({ ...form, teams: form.teams.map((team) => team.map((player) => player.trim())) as [string[], string[]] }); try { service.addMatch(match) } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save match'); setSubmitting(false); return } setLastUpdated(new Date()); setForm(null); setSubmitting(false); setNotice(`${match.id} scheduled on Court ${match.courtId}.`); setActiveTab('Courts') }
-  const handleRequest = async (settings: MatchSettings, matchIds: string[]) => { const request = await localChangeRequestService.createChangeRequest(matchIds, settings); setPending((current) => [...current, request]); setNotice('Change request saved locally.') }
-  useEffect(() => { if (activeTab === 'Sponsors') setNotice('') }, [activeTab])
-  const displayedMatch = displayCourtId === null ? undefined : matches.find((match) => match.courtId === displayCourtId)
-  if (activeTab === 'Sponsors') return <>{displayedMatch && <CourtDisplay service={service} key={displayedMatch.id} court={courts.find((court) => court.id === displayCourtId)!} match={displayedMatch} sponsors={sponsors} startChangeover onClose={() => { setDisplayCourtId(null); setActiveTab('Sponsors') }} />}{!displayedMatch && <SponsorsView sponsors={sponsors} setSponsors={setSponsors} onPreview={() => setDisplayCourtId(courts[0].id)} />}</>
-  return <>{notice && <div className="notice" role="status">{notice}</div>}{displayedMatch && <CourtDisplay service={service} key={displayedMatch.id} court={courts.find((court) => court.id === displayCourtId)!} match={displayedMatch} sponsors={sponsors} onClose={() => setDisplayCourtId(null)} />}{activeTab === 'Rules' ? <RulesView defaults={defaults} setDefaults={setDefaults} matches={matches} pending={pending} onRequest={handleRequest} /> : activeTab === 'Matches' ? <MatchesView matches={matches} /> : <section className="dashboard-content"><div className="section-heading"><div><p className="kicker">Live overview</p><h2>Court status</h2></div><span className="refresh-label">Last updated {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></div><div className="summary-grid"><div className="summary-card summary-card--occupied"><span className="summary-inline-label">Occupied: {occupiedCount}/{courts.length}</span></div><div className="summary-card summary-card--available"><span className="summary-inline-label">Available: {availableCount}/{courts.length}</span></div><div className="summary-card summary-card--matches"><span className="summary-inline-label">Matches today: {matches.length}</span></div></div>{form && <MatchForm courts={courts} availableCourtIds={courts.filter((court) => !matches.some((match) => match.courtId === court.id)).map((court) => court.id)} form={form} setForm={setForm} submitting={submitting} error={error} onSubmit={handleAssign} onCancel={() => setForm(null)} />}<div className="court-grid">{courts.map((court) => <CourtCard service={service} key={court.id} court={court} match={matches.find((match) => match.courtId === court.id)} onAssign={() => { setForm(blankForm(court.id, defaults)); setError(''); setNotice('') }} onDisplay={() => setDisplayCourtId(court.id)} />)}</div><p className="data-note"><span>i</span> Matches and settings are saved in this browser.</p></section>}</>
-}
-
-export function DashboardShell({ activeTab, onTab, children }: { activeTab: string; onTab: (tab: string) => void; children: React.ReactNode }) {
-  return <main className="app-shell">
-    <header className="page-header"><h1 aria-label="CourtSide AI - Organizer" /></header>
-    <nav className="tabs" aria-label="Tournament sections">{tabs.map(tab => <button key={tab} type="button" className={activeTab === tab ? 'tab tab--active' : 'tab'} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => onTab(tab)}>{tab}</button>)}</nav>
-
-    {children}
-  </main>
+  const [draft, setDraft] = useState<SponsorDraft>(emptySponsor)
+  const save = () => { if (!draft.name.trim() || !/^https?:\/\/[^\s]+$/i.test(draft.mediaUrl)) return; setSponsors([...sponsors, { ...draft, id: `sponsor-${Date.now()}`, name: draft.name.trim(), mediaUrl: draft.mediaUrl.trim() }]); setDraft(emptySponsor) }
+  return <section className="dashboard-content sponsors-view"><div className="sponsors-heading"><p className="kicker">Changeover playlist</p><h2>Sponsors</h2><p>Enabled sponsors play in order during changeovers.</p><button type="button" className="button button--primary" onClick={onPreview}>Preview changeover</button></div><div className="sponsor-manager"><div className="sponsor-form"><h3>Add sponsor</h3><label>Sponsor name<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>Media type<select value={draft.mediaType} onChange={(event) => setDraft({ ...draft, mediaType: event.target.value as SponsorMediaType })}><option>Image</option><option>Video</option><option>Audio</option></select></label><label>Hosted media URL<input type="url" value={draft.mediaUrl} placeholder="https://example.com/media" onChange={(event) => setDraft({ ...draft, mediaUrl: event.target.value })} /></label><label>Image display duration (seconds)<input type="number" min="1" step="1" value={draft.imageDurationSeconds} onChange={(event) => setDraft({ ...draft, imageDurationSeconds: Number(event.target.value) })} /></label><label className="sponsor-enabled"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /> Enabled in playlist</label><div className="form-actions"><button type="button" className="button button--primary" onClick={save}>Save sponsor</button></div></div><div className="sponsor-list"><div className="sponsor-list-heading"><h3>Saved sponsors</h3></div>{sponsors.length === 0 && <p className="empty-sponsors">No sponsors saved yet.</p>}{sponsors.map((sponsor) => <article className="sponsor-item" key={sponsor.id}><div className="sponsor-preview">{sponsor.mediaType === 'Image' ? <img src={sponsor.mediaUrl} alt="" /> : sponsor.mediaType === 'Video' ? <video src={sponsor.mediaUrl} muted controls /> : <span className="audio-preview">Audio</span>}</div><div className="sponsor-info"><h4>{sponsor.name}</h4><p>{sponsor.mediaType}</p><StatusPill label={sponsor.enabled ? 'Enabled' : 'Disabled'} showDot={false} sponsorStatus={sponsor.enabled ? 'enabled' : 'disabled'} /></div></article>)}</div></div></section>
 }
 
 export function App() {
   const [activeTab, setActiveTab] = useState('Courts')
-  return <DashboardShell activeTab={activeTab} onTab={setActiveTab}><LocalDemo activeTab={activeTab} setActiveTab={setActiveTab} /></DashboardShell>
+  const [courts, setCourts] = useState<Court[]>([])
+  const [matches, setMatches] = useState<Match[]>([])
+  const [form, setForm] = useState<FormState | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [feedStatus, setFeedStatus] = useState('')
+  const [lastUpdated, setLastUpdated] = useState(() => new Date())
+  const [displayMatchId, setDisplayMatchId] = useState<string | null>(null)
+  const [defaults, setDefaults] = useState<MatchSettings>(() => loadSettings())
+  const [sponsors, setSponsors] = useState<Sponsor[]>(() => loadLocal('tennis-sponsors', initialSponsors))
+
+  useEffect(() => { try { window.localStorage.setItem('tennis-default-settings', JSON.stringify(defaults)); window.localStorage.setItem('tennis-sponsors', JSON.stringify(sponsors)) } catch { /* local persistence is optional */ } }, [defaults, sponsors])
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([loadTwoCourts(), backendMatchService.listMatches()]).then(([courtList, matchList]) => {
+      if (cancelled) return
+      setCourts(courtList)
+      setMatches(matchList)
+      setLastUpdated(new Date())
+      setError('')
+    }).catch((failure) => setError(failure instanceof Error ? failure.message : 'Could not load backend data.')).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+  const replaceMatches = useCallback((next: Match[]) => { setMatches(next); setLastUpdated(new Date()) }, [])
+  const receiveMatch = useCallback((next: Match) => { setMatches((current) => upsertMatch(current, next)); setLastUpdated(new Date()) }, [])
+  const updateMatch = useCallback((match: Match) => { setMatches((current) => upsertMatch(current, match)); setLastUpdated(new Date()) }, [])
+  useDashboardSocket(!loading, replaceMatches, receiveMatch, setFeedStatus)
+
+  const occupiedCount = courts.filter((court) => matches.some((match) => match.courtId === court.id && match.status !== 'Complete')).length
+  const availableCount = courts.length - occupiedCount
+  const availableCourtIds = courts.filter((court) => !matches.some((match) => match.courtId === court.id && match.status !== 'Complete')).map((court) => court.id)
+  const displayedMatch = displayMatchId === null ? undefined : matches.find((match) => match.id === displayMatchId)
+  const displayedCourt = displayedMatch === undefined ? undefined : courts.find((court) => court.id === displayedMatch.courtId)
+
+  const handleAssign = async () => {
+    if (!form || submitting) return
+    const teamSize = form.format === 'Singles' ? 1 : 2
+    const teams = form.teams.map((team) => team.slice(0, teamSize).map((player) => player.trim())) as [string[], string[]]
+    if (teams.flat().some((player) => !player)) { setError('Enter every player name before assigning the match.'); return }
+    if (!form.server) { setError('Select the initial server.'); return }
+    if ([form.settings.gamesPerSet, form.settings.tiebreakAt, form.settings.setsToWin].some((value) => !validSeconds(Number(value)))) { setError('Match rules must use positive whole numbers.'); return }
+    if (form.settings.tiebreakAt < form.settings.gamesPerSet) { setError('Tiebreak at cannot be lower than games per set.'); return }
+    if (matches.some((match) => match.courtId === form.courtId && match.status !== 'Complete')) { setError('That court is already assigned. Choose an available court.'); return }
+    setError(''); setSubmitting(true)
+    try {
+      const match = await backendMatchService.createScheduledMatch({ ...form, teams })
+      setMatches((current) => upsertMatch(current, match))
+      setLastUpdated(new Date())
+      setForm(null)
+      setNotice(`${teamTitle(match)} assigned to ${courts.find((court) => court.id === match.courtId)?.name || 'court'}.`)
+      setActiveTab('Courts')
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Match creation failed.') } finally { setSubmitting(false) }
+  }
+
+  const handleEndMatch = async (match: Match) => {
+    const winner = leadingTeam(match)
+    if (!window.confirm(`End this match with ${match.teams[winner].join(' / ')} as winner?`)) return
+    setError('')
+    try {
+      const sets = [Number(match.scores[0].sets), Number(match.scores[1].sets)] as [number, number]
+      sets[winner] = Math.max(sets[winner] || 0, match.settings.setsToWin)
+      const next = await sendMatchOverride(match.id, { status: 'complete', winner_team: winner, sets })
+      setMatches((current) => upsertMatch(current, next))
+      setNotice(`${teamTitle(next)} ended on ${courts.find((court) => court.id === next.courtId)?.name || 'court'}.`)
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Could not end match.')
+    }
+  }
+
+  if (activeTab === 'Sponsors') return <main className="app-shell"><section className="page-header"><h1 aria-label="CourtSide AI - Organizer" /></section><nav className="tabs" aria-label="Tournament sections">{tabs.map((tab) => <button key={tab} type="button" className={activeTab === tab ? 'tab tab--active' : 'tab'} onClick={() => setActiveTab(tab)}>{tab}</button>)}</nav>{displayedMatch && displayedCourt && <CourtDisplay key={displayedMatch.id} court={displayedCourt} match={displayedMatch} sponsors={sponsors} startChangeover onMatchUpdate={updateMatch} onClose={() => { setDisplayMatchId(null); setActiveTab('Sponsors') }} />}{!displayedMatch && <SponsorsView sponsors={sponsors} setSponsors={setSponsors} onPreview={() => matches[0] && setDisplayMatchId(matches[0].id)} />}</main>
+  return <main className="app-shell"><header className="topbar"><div className="brand-lockup"><span className="brand-mark">T</span><span>COURTLINE <small>TOURNAMENT OPS</small></span></div><div className="event-context"><span className="live-indicator" /> {tournamentConfig.date} <strong>{tournamentConfig.name}</strong></div></header><section className="page-header"><div><p className="kicker">Organizer dashboard / {tournamentConfig.name}</p><h1 aria-label="CourtSide AI - Organizer">Tennis Tournament <span>(Organizer)</span></h1></div><div className="sample-badge">LIVE DATA <span>Django backend</span></div></section><nav className="tabs" aria-label="Tournament sections">{tabs.map((tab) => <button key={tab} type="button" className={activeTab === tab ? 'tab tab--active' : 'tab'} onClick={() => { setActiveTab(tab); setNotice('') }}>{tab}</button>)}</nav>{notice && <div className="notice" role="status">{notice}</div>}{error && <div className="notice" role="alert">{error}</div>}{displayedMatch && displayedCourt && <CourtDisplay key={displayedMatch.id} court={displayedCourt} match={displayedMatch} onMatchUpdate={updateMatch} onClose={() => setDisplayMatchId(null)} />}{activeTab === 'Rules' ? <RulesView defaults={defaults} setDefaults={setDefaults} /> : activeTab === 'Matches' ? <MatchesView matches={matches} courts={courts} onPreview={(matchId) => setDisplayMatchId(matchId)} /> : <section className="dashboard-content"><div className="section-heading"><div><p className="kicker">Live overview</p><h2>Court status</h2></div><span className="refresh-label">{loading ? 'Loading backend...' : `${feedStatus || 'REST loaded'} / Last updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`}</span></div><div className="summary-grid"><div className="summary-card summary-card--occupied"><span className="summary-inline-label">Occupied: {occupiedCount}/{courts.length}</span></div><div className="summary-card summary-card--available"><span className="summary-inline-label">Available: {availableCount}/{courts.length}</span></div><div className="summary-card summary-card--matches"><span className="summary-inline-label">Match history: {matches.length}</span></div></div>{form && <MatchForm courts={courts} availableCourtIds={availableCourtIds} form={form} setForm={setForm} submitting={submitting} error={error} onSubmit={handleAssign} onCancel={() => setForm(null)} />}<div className="court-grid">{courts.map((court, index) => { const activeMatch = matches.find((match) => match.courtId === court.id && match.status !== 'Complete'); return <CourtCard key={court.id} court={court} index={index} match={activeMatch} onAssign={() => { setForm(blankForm(court.id, defaults)); setError(''); setNotice('') }} onDisplay={() => activeMatch && setDisplayMatchId(activeMatch.id)} onEndMatch={handleEndMatch} /> })}</div>{!loading && courts.length === 0 && <p className="data-note"><span>i</span>Connect Firestore so Court 1 and Court 2 can be created automatically.</p>}</section>}</main>
 }
 
 export default App

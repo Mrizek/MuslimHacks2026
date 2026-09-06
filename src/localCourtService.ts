@@ -22,14 +22,14 @@ function saveState(record: RecordMatch): SavedState {
  * games/sets, rather than left in the point counters. Existing saved records are
  * never revalidated or rewritten on load. */
 export function validateOverride(match: Match, proposed: OverrideProposal): string {
-  if (!match.teams.flat().includes(proposed.server)) return 'Choose a current player as server.'
+  if (!proposed.server || !match.teams.flat().includes(proposed.server)) return 'Choose a current player as server.'
   if (!Array.isArray(proposed.scores) || proposed.scores.length !== 2) return 'Enter both team scores.'
   const scores = proposed.scores
   if (scores.some(s => !/^(0|[1-9]\d*)$/.test(s.sets) || !/^(0|[1-9]\d*)$/.test(s.games))) return 'Sets and games must be non-negative whole numbers.'
   const sets = scores.map(s => Number(s.sets)), games = scores.map(s => Number(s.games))
   if (sets.some(n => !Number.isSafeInteger(n)) || games.some(n => !Number.isSafeInteger(n))) return 'Score values are too large.'
   if (games.some(n => n > 6) || (Math.max(...games) >= 6 && Math.abs(games[0] - games[1]) >= 2)) return 'Record a completed set in Sets and reset Games for the next set.'
-  const tie = games.every(n => n === 6) || (match.settings.decidingTiebreak && sets.every(n => n === 1) && games.every(n => n === 0))
+  const tie = games.every(n => n === 6) || ((match.settings.tiebreakPoints === 10 || match.settings.decidingTiebreak) && sets.every(n => n === 1) && games.every(n => n === 0))
   if (tie) {
     if (scores.some(s => !/^(0|[1-9]\d*)$/.test(s.points) || !Number.isSafeInteger(Number(s.points)))) return 'Tiebreak points must be non-negative whole numbers.'
     const points = scores.map(s => Number(s.points)), target = games.every(n => n === 6) ? 7 : 10
@@ -117,7 +117,8 @@ export class LocalCourtService implements CourtActionService {
           const reason = validateOverride(record, command.proposed)
           if (reason) return { accepted: false, reason }
           state.history.push(previous)
-          record = { ...record, ...clone(command.proposed) }; description = 'Scores and server updated locally.'; break
+          const proposed = command.proposed as Pick<Match, 'scores' | 'server'>
+          record = { ...record, scores: clone(proposed.scores), server: proposed.server }; description = 'Scores and server updated locally.'; break
         }
         case 'correction': {
           const restored = state.history.pop()!

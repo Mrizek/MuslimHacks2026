@@ -1,3 +1,9 @@
+__pycache__/
+*.py[cod]
+.env
+db.sqlite3
+.firebase/
+firebase-debug.log
 # Logs
 logs
 *.log

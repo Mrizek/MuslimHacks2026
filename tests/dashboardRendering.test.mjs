@@ -4,7 +4,7 @@ import { createServer } from 'vite'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-test('saved local dashboard renders without backend access or a mode selector', async () => {
+test('backend dashboard shell renders without backend access or a mode selector during SSR', async () => {
   const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
   const previousWindow = globalThis.window
   const previousFetch = globalThis.fetch
@@ -29,9 +29,8 @@ test('saved local dashboard renders without backend access or a mode selector', 
       assert.doesNotMatch(html, /local-demo-indicator|>Local demo</)
       assert.doesNotMatch(html, /Backend matches|Match data source|Reconnect|Connected|Offline|not connected/)
       assert.doesNotMatch(html, /class="tabs app-shell"/)
-        assert.match(html, /Court status/)
-        assert.match(html, /Saved Alice/)
-        assert.match(html, /Saved Bob/)
+      assert.match(html, /Court status/)
+      assert.match(html, /Loading backend/)
     }
     assert.equal(requests, 0, 'Local rendering must not wait for or contact the backend')
     assert.equal(storage.get('tennis-matches'), JSON.stringify([savedMatch]))
