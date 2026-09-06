@@ -1,8 +1,8 @@
 import type { Match } from './types'
 
-export type CourtAction = 'correction' | 'override' | 'changeover' | 'umpire'
-export type MatchTimerState = { phase: 'serve' | 'changeover'; endsAt: number | null; remainingSeconds: number }
-export type CourtSnapshot = { match: Match; revision: string; timer?: MatchTimerState; umpirePending: boolean; canUndo: boolean }
+export type CourtAction = 'start' | 'correction' | 'override' | 'changeover' | 'umpire' | 'umpireResolve' | 'clockStart' | 'clockPause' | 'clockReset' | 'clockEnable' | 'changeoverWarning'
+export type MatchTimerState = { phase: 'serve' | 'changeover'; endsAt: number | null; remainingSeconds: number; warningIssued?: boolean; started?: boolean }
+export type CourtSnapshot = { match: Match; revision: string; connectionError?: string; timer?: MatchTimerState; serveClock?: MatchTimerState; umpirePending: boolean; umpireDelivery?: 'local' | 'queued' | 'delivered'; canUndo: boolean }
 export type OverrideProposal = Pick<Match, 'scores' | 'server'>
 type CommandContext = { courtId: number; matchId: string; expectedRevision: string; requestId: string }
 export type CourtCommand = CommandContext & (
@@ -32,10 +32,44 @@ export interface CourtActionService {
 }
 
 export const missingCourtHandlers: Record<CourtAction, string> = {
-  correction: 'Unavailable — scoring undo/history not connected',
-  override: 'Unavailable — scoring validation and organizer authorization not connected',
-  changeover: 'Unavailable — match engine changeover not connected',
-  umpire: 'Unavailable — umpire request service not connected',
+  start: 'Not available in demo',
+  correction: 'Not available in demo',
+  override: 'Not available in demo',
+  changeover: 'Not available in demo',
+  umpire: 'Not available in demo',
+  umpireResolve: 'Not available in demo',
+  clockStart: 'Not available in demo',
+  clockPause: 'Not available in demo',
+  clockReset: 'Not available in demo',
+  clockEnable: 'Not available in demo',
+  changeoverWarning: 'Not available in demo',
+}
+
+export function umpireRequestStatus(snapshot: CourtSnapshot): string {
+  if (!snapshot.umpirePending) return ''
+  return snapshot.umpireDelivery === 'queued' ? 'Pending delivery' : snapshot.umpireDelivery === 'delivered' || snapshot.umpireDelivery === 'local' ? 'Umpire requested' : 'Delivery unconfirmed'
+}
+
+/** Connection is informational. Each adapter must enforce state, persistence,
+ * authorization and delivery requirements before accepting a command, including
+ * offline commands. A queued umpire request must explicitly report queued delivery.
+ * Start must initialize scores, serving order and timers through the engine.
+ */
+export function courtActionUnavailable(action: CourtAction, snapshot: CourtSnapshot, service: CourtActionService): string {
+  if (!service.capabilities[action]) return service.unavailableReasons?.[action] ?? missingCourtHandlers[action]
+  if (action === 'umpire' && snapshot.umpirePending) return umpireRequestStatus(snapshot)
+  if (action === 'umpireResolve') return snapshot.umpirePending ? '' : 'No pending request'
+  if (action === 'correction') return snapshot.canUndo ? '' : 'Nothing to undo'
+  if (snapshot.match.status === 'Complete') return 'Match complete'
+  if (action === 'start' && snapshot.match.status !== 'Scheduled') return 'Match already started'
+  if (action !== 'start' && action !== 'umpire' && snapshot.match.status !== 'Live') return 'Start match first'
+  if (snapshot.connectionError) return snapshot.connectionError
+  if (!snapshot.revision) return 'Waiting for match engine state'
+  if (action === 'changeover' && snapshot.match.settings.expressMode) return 'Express mode skips changeovers'
+  if (action === 'changeover' && snapshot.timer?.phase === 'changeover') return 'Changeover already in progress'
+  if (action.startsWith('clock') && snapshot.timer?.phase === 'changeover') return 'Changeover in progress'
+  if (action.startsWith('clock') && action !== 'clockEnable' && !snapshot.match.settings.serveClockEnabled) return 'Enable serve clock first'
+  return ''
 }
 
 // No scoring or synchronization backend is connected in the local demo.

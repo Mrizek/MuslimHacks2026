@@ -1,8 +1,8 @@
 export type MatchFormat = 'Singles' | 'Doubles' | 'Mixed doubles'
 export type MatchSettings = { noAd: boolean; decidingTiebreak: boolean; expressMode: boolean; serveClockEnabled: boolean; serveClockSeconds: number; changeoverSeconds: number }
 export type MatchScore = { sets: string; games: string; points: string }
-export type Match = { id: string; courtId: number; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings; status: 'Live' | 'Scheduled'; scores: [MatchScore, MatchScore]; setHistory?: string[][] }
-export type Court = { id: number; name: string; connection: 'Connected' | 'Offline' }
+export type Match = { id: string; courtId: number; format: MatchFormat; teams: [string[], string[]]; server: string; settings: MatchSettings; status: 'Live' | 'Scheduled' | 'Complete'; scores: [MatchScore, MatchScore]; setHistory?: string[][] }
+export type Court = { id: number; name: string; connection: 'Connected' | 'Offline' | 'Local demo' }
 export type PendingChangeRequest = { id: string; matchIds: string[]; requestedSettings: MatchSettings; status: 'Pending court confirmation'; createdAt: string }
 export type SponsorMediaType = 'Image' | 'Video' | 'Audio'
 export type Sponsor = { id: string; name: string; mediaType: SponsorMediaType; mediaUrl: string; imageDurationSeconds: number; enabled: boolean }
