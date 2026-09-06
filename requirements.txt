@@ -2,3 +2,5 @@ Django==5.2.1
 channels[daphne]==4.2.2
 firebase-admin==6.8.0
 python-dotenv==1.2.2
+deepgram-sdk==3.10.1
+PyAudio

@@ -116,3 +116,5 @@ body{background:var(--paper);color:var(--ink);overflow-x:hidden}.topbar{backgrou
 .score-table tbody tr:last-child th,.score-table tbody tr:last-child td{border-bottom:0}
 @media(max-width:600px){.score-table{grid-template-columns:minmax(0,1fr) 52px 64px minmax(88px,104px);column-gap:8px}.score-table th,.score-table td{font-size:inherit}.score-table tbody td:last-child{padding-inline:0}}
 .score-table tbody th{overflow-wrap:normal;word-break:normal;white-space:normal}
+
+.button--danger{color:#fff;background:#d92f2f;border:0}.button--danger:hover,.button--danger:focus-visible{background:#ff5252;color:#07120e}.court-card--umpire{border-color:#ff5252;border-top-color:#ff5252}.umpire-alert{margin-top:16px;padding:12px 14px;background:#3a0808;border:2px solid #ff5252;color:#ff5252;font-size:clamp(20px,2vw,26px);font-weight:800;text-transform:uppercase;letter-spacing:.7px}.danger-text{color:#ff5252!important}.match-meta__actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.match-row small{display:block;margin-top:7px;color:#d1ddd1;font-size:16px}.match-row .button{justify-self:end}

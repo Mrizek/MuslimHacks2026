@@ -193,6 +193,14 @@ class ServiceSafetyTests(SimpleTestCase):
 
         self.assertEqual(self.repository.get_match(self.match_id), before)
 
+    def test_snapshot_reports_persisted_undo_availability(self):
+        self.assertFalse(self.service.get_match(ORGANIZER, self.match_id)["can_undo"])
+        scored = self.service.mutate(ORGANIZER, self.match_id, "score_point", {"winner_team": 0})
+        self.assertTrue(scored["can_undo"])
+        restored = self.service.mutate(ORGANIZER, self.match_id, "undo", {})
+        self.assertFalse(restored["can_undo"])
+        self.assertEqual(restored["display_score"]["points"], ["0", "0"])
+
     def test_completed_match_rejects_scoring(self):
         fast = self.service.create_match(
             ORGANIZER,
