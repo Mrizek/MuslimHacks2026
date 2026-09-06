@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Match writes and reads go through the authenticated Django backend.
+    // Firebase Admin bypasses these client rules and enforces trusted claims.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

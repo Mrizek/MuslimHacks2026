@@ -1,0 +1,4 @@
+:root { --ink:#172322; --muted:#687573; --paper:#f4f6f1; --white:#fff; --line:#dbe3dc; --green:#0b6b53; --lime:#c6f078; --orange:#e8643d; --navy:#173844; --sans:'Trebuchet MS','Segoe UI',sans-serif; --heading:'Arial Narrow','Trebuchet MS',sans-serif; font:16px/1.45 var(--sans); color:var(--ink); background:var(--paper); font-synthesis:none; text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased; }
+* { box-sizing:border-box; }
+body { margin:0; min-width:320px; }
+#root { min-width:100%; min-height:100vh; }
