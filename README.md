@@ -14,7 +14,7 @@ CourtSide AI is a local tennis tournament app with a Vite React frontend and a D
 
 Install these first:
 
-- Python 3.11 or newer
+- Python 3.13 (recommended on Windows for the PyAudio dependency)
 - Node.js 22 or newer
 - npm
 - A Firebase service-account JSON file for the Firestore project
@@ -32,7 +32,7 @@ cd "C:\Users\rayan\OneDrive\Bureau\muslimhacks\MuslimHacks2026"
 Install Python dependencies:
 
 ```powershell
-py -m venv .venv
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
@@ -45,7 +45,7 @@ npm install
 
 ## Environment Files
 
-Create the backend env file at the repo root:
+Create the backend and standalone speech-script env file at the repo root (skip the copy if you already have `.env`):
 
 ```powershell
 Copy-Item .env.example .env
@@ -61,6 +61,7 @@ DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
 DJANGO_CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 FIREBASE_PROJECT_ID=your-firebase-project-id
 GOOGLE_APPLICATION_CREDENTIALS=C:\absolute\path\outside\this\repo\firebase-service-account.json
+DEEPGRAM_API_KEY=your_deepgram_key_here
 ```
 
 Create the frontend env file at the repo root:
@@ -78,6 +79,30 @@ VITE_COURTSIDE_WS_BASE_URL=ws://127.0.0.1:8000/ws
 ```
 
 Vite only exposes variables that start with `VITE_`. Do not add Firebase Admin credentials to `.env.local`.
+
+## Standalone Deepgram Microphone Script
+
+`speechRecognition.py` is a separate microphone transcription demo. It does not
+start the web app or automatically send its output to the Django scoring backend.
+The browser frontend has its own speech-recognition implementation.
+
+1. Install the Python dependencies above.
+2. Copy `.env.example` to `.env` only if `.env` does not already exist.
+3. Set `DEEPGRAM_API_KEY` in `.env` to your own valid key and save the file.
+4. From the repository root, run:
+
+```powershell
+.\.venv\Scripts\python.exe speechRecognition.py
+```
+
+The script loads `.env` beside the script automatically, independent of the
+terminal's working directory. An existing `DEEPGRAM_API_KEY` environment variable
+takes precedence over the value in `.env`; remove or update a stale terminal
+variable if necessary. A missing or empty key produces a setup message.
+
+Keep real keys in the ignored `.env`, never in Python files, `.env.example`,
+frontend variables or commits. The example files contain placeholders only.
+If a key was exposed previously, revoke it in Deepgram before using a replacement.
 
 ## Start The App
 

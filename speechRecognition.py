@@ -1,6 +1,9 @@
 import asyncio
 import os
 import re
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from deepgram import (
     DeepgramClient,
@@ -8,6 +11,8 @@ from deepgram import (
     LiveOptions,
 )
 import pyaudio
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # Audio Configuration
 FORMAT = pyaudio.paInt16
