@@ -45,14 +45,16 @@ npm install
 
 ## Environment Files
 
-Create the backend and standalone speech-script env file at the repo root (skip the copy if you already have `.env`):
+The committed `.env.example` contains only the key setting for the standalone Deepgram script. Copy it to `.env` at the repo root if you do not already have that file, then enter your own Deepgram key:
 
 ```powershell
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 notepad .env
 ```
 
-Example `.env`:
+For the web app, add the following backend settings to the same `.env` file, using your own Firebase project and credential path. If you only run the standalone Deepgram script, you only need `DEEPGRAM_API_KEY`.
+
+Example combined `.env`:
 
 ```dotenv
 DJANGO_SECRET_KEY=local-demo-only-change-me
@@ -64,10 +66,9 @@ GOOGLE_APPLICATION_CREDENTIALS=C:\absolute\path\outside\this\repo\firebase-servi
 DEEPGRAM_API_KEY=your_deepgram_key_here
 ```
 
-Create the frontend env file at the repo root:
+For the web app, create or open `.env.local` at the repo root and add the frontend settings shown below. Save it with that exact filename; no frontend example file is required.
 
 ```powershell
-Copy-Item .env.local.example .env.local
 notepad .env.local
 ```
 
@@ -101,7 +102,7 @@ takes precedence over the value in `.env`; remove or update a stale terminal
 variable if necessary. A missing or empty key produces a setup message.
 
 Keep real keys in the ignored `.env`, never in Python files, `.env.example`,
-frontend variables or commits. The example files contain placeholders only.
+frontend variables or commits. The committed `.env.example` contains no real key.
 If a key was exposed previously, revoke it in Deepgram before using a replacement.
 
 ## Start The App
@@ -304,7 +305,7 @@ From this folder:
 python server.py
 ```
 
-Set `DEEPGRAM_API_KEY`, then run:
+Set `DEEPGRAM_API_KEY` in the repo-root `.env` file as described above, then run:
 
 ```powershell
 python speechRecognition.py
