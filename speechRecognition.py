@@ -56,7 +56,7 @@ def print_call(transcript, source="VOICE"):
 
 async def main():
     try:
-        api_key = "1ba157bf5683dd8b441996773275451e83f3b168"
+        api_key = os.getenv("DEEPGRAM_API_KEY")
         if not api_key:
             print("Missing DEEPGRAM_API_KEY.")
             print('PowerShell: $env:DEEPGRAM_API_KEY = "your_api_key"')
